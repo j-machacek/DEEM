@@ -1,6 +1,7 @@
+#!/usr/bin/env python3
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 #               DEEM - Differential Evolution with Elitism and Multi-populations
-#                               Copyright (C) 2023 Jan Machacek  
+#                               Copyright (C) 2023 Jan Machacek
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 #
 # author: Jan Machacek, jan-machacek@outlook.com
@@ -11,29 +12,82 @@
 # History
 # 05.02.2023, J. Machacek - Initial version
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
-#!/usr/bin/env python3
+
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mlp
 
-def cm2inch(*tupl):
-    '''
-    Transform values (v1,v2,v3,...) given in cm to inch
-    '''
-    # History:
-    # 26.10.2021 - J. Machacek, Initial version
+def cm2inch(*dimensions):
+    """
+    Convert a dimension or tuple of dimensions from centimeters to inches.
 
+    Parameters
+    ----------
+    dimensions : float or tuple
+        One or more values in centimeters.
+
+    Returns
+    -------
+    tuple of float
+        The converted dimensions in inches.
+    """
     inch = 2.54
-    if isinstance(tupl[0], tuple):
-        return tuple(i/inch for i in tupl[0])
+    if isinstance(dimensions[0], tuple):
+        return tuple(value / inch for value in dimensions[0])
     else:
-        return tuple(i/inch for i in tupl)
+        return tuple(value / inch for value in dimensions)
 
 
 class Logger:
+    """
+    Handles logging and plotting of data during DEEM optimization runs.
 
-    def __init__(self,path,lower_bound,upper_bound):
+    Attributes
+    ----------
+    path : str
+        Directory where figures and data are stored.
+    iteration : list of int
+        List of iteration indices over the run.
+    fbest : list of float
+        Best cost values for each iteration.
+    best_position : list of array-like
+        Best solution(s) found during the run.
+    generations : list of list
+        History of particles (or solutions) at each iteration.
+    np_reset : list of int
+        Number of reset particles at each iteration.
+    nElite : list of int
+        Number of swarms or elite count (depending on usage).
+    diversity_best : list of float
+        Diversity measure (e.g., position-based) for best solutions each iteration.
+    diversity_gbest : list of float
+        Diversity measure for global best solutions each iteration.
+    diversity_gbest_swarms : list of list
+        Per-swarm diversity tracking, each sublist is appended each iteration.
+    upper_bound : array-like
+        Upper bound(s) of the search space.
+    lower_bound : array-like
+        Lower bound(s) of the search space.
+    FigWidth : float
+        Width of figures in centimeters.
+    FigHeight : float
+        Height of figures in centimeters.
+    my_dpi : int
+        Resolution for saved figures (dots per inch).
+    myfontsize : int
+        Font size for all plots.
 
+    Methods
+    -------
+    save(...)
+        Save iteration data into the logger’s lists.
+    plot_initial_distribution(particles)
+        Optional function to visualize initial distribution of particles.
+    plot_results()
+        Generate and save summary plots of cost, diversity, and convergence history.
+    """
+
+    def __init__(self, path, lower_bound, upper_bound):
         self.path = path
 
         self.iteration = []
@@ -41,7 +95,6 @@ class Logger:
         self.best_position = []
         self.generations = []
         self.np_reset = []
-        
         self.convergence_history = []
 
         self.nElite = []
@@ -52,13 +105,38 @@ class Logger:
         self.upper_bound = upper_bound
         self.lower_bound = lower_bound
 
-        self.FigWidth = 8.  # width of figures in cm
-        self.FigHeight = 5. # height of figures in cm
+        # Plotting configuration
+        self.FigWidth = 8.0   # Width of figures in centimeters
+        self.FigHeight = 5.0  # Height of figures in centimeters
         self.my_dpi = 600
         self.myfontsize = 9
 
+    def save(self, iteration, fbest, best_position, particles,
+             nElite, np_reset, DIV_best, DIV_gbest, DIV_swarms):
+        """
+        Save data for a single iteration into the logger.
 
-    def save(self,iteration,fbest,best_position,particles,nElite,np_reset,DIV_best,DIV_gbest,DIV_swarms):
+        Parameters
+        ----------
+        iteration : int
+            Current iteration number.
+        fbest : float
+            Best cost found at this iteration.
+        best_position : array-like
+            Current best position (solution) at this iteration.
+        particles : list
+            List of particles (or solutions) at this iteration.
+        nElite : int
+            Number of swarms or elite count for this iteration.
+        np_reset : int
+            Number of reset particles during this iteration.
+        DIV_best : float
+            Diversity measure for current best solutions.
+        DIV_gbest : float
+            Diversity measure for global best solutions.
+        DIV_swarms : list
+            Diversity measure(s) per swarm, appended each iteration.
+        """
         self.iteration.append(iteration)
         self.fbest.append(fbest)
         self.best_position.append(best_position)
@@ -69,87 +147,73 @@ class Logger:
         self.diversity_best.append(DIV_best)
         self.diversity_gbest.append(DIV_gbest)
 
+        # Overwrite with the most recent swarm-level diversities
         self.diversity_gbest_swarms = DIV_swarms
 
+    def plot_initial_distribution(self, particles):
+        """
+        Plot the initial distribution of particles in the search space.
+        Currently commented out for demonstration; you can enable and adapt
+        for your own problem or dimensionality.
 
-    def plot_initial_distribution(self,particles):
-
-        mlp.use('Agg')
+        Parameters
+        ----------
+        particles : list
+            Particles (or solutions) to be plotted.
+        """
+        mlp.use('Agg')  # Use a non-GUI backend suitable for batch mode.
         ndim = len(self.upper_bound)
 
-        # positions = np.zeros((len(particles),ndim)) ; cost = np.zeros(len(particles))
-        # counter = 0
-        # for p in particles:
-        #     positions[counter,:] = p.x ; cost[counter] = p.fbest ; counter += 1
-
-        # fig, sp = plt.subplots(ndim+1, 1, figsize=(self.FigWidth,ndim*self.FigHeight/5))
-
-        # #fig.suptitle('Initial position of particles $\mathbf{x}=(x_1,...,x_n)$, with $n=$ %d' % (ndim), fontsize=self.myfontsize, y=1.3)
-
-        # # make a first empty plot to create space for the color bar
-        # sp[0].spines["bottom"].set_visible(False)
-        # sp[0].spines["left"].set_visible(False)
-        # sp[0].spines["top"].set_visible(False)
-        # sp[0].spines["right"].set_visible(False)
-        # sp[0].get_yaxis().set_ticks([])
-        # sp[0].get_xaxis().set_ticks([])
-
-        # for idim in range(0,ndim):
-            
-        #     sc = sp[idim+1].scatter(positions[:,idim], positions[:,idim]*0., c=cost, s=10, cmap='viridis')
-        #     sp[idim+1].vlines((self.lower_bound[idim],self.upper_bound[idim]), -1, 1, color='r', lw=1.5)
-        #     sp[idim+1].set_xlim((self.lower_bound[idim],self.upper_bound[idim]))
-        #     sp[idim+1].set_ylim((-0.01,0.01))
-        #     sp[idim+1].get_yaxis().set_ticks([])
-        #     sp[idim+1].set_xlabel(r'Component $x_{{{:2d}}}$'.format(idim+1))
-        #     sp[idim+1].tick_params(direction='in', which='both') 
-        #     sp[idim+1].spines['bottom'].set_position('center')
-        #     sp[idim+1].spines["left"].set_visible(False)
-        #     sp[idim+1].spines["top"].set_visible(False)
-        #     sp[idim+1].spines["right"].set_visible(False)
-
-        # cbar = fig.colorbar(sc, ax=sp, location='top', orientation='horizontal', pad=-0.2, aspect=80)
-        # cbar.ax.set_title('Initial position $\mathbf{x}=(x_1,...,x_n)$ and objective function value $\epsilon$ of particles (color bar)', fontsize=self.myfontsize)
-
-        # plt.tight_layout(h_pad=1.25)
+        # Example code snippet (commented)
+        #
+        # positions = np.zeros((len(particles), ndim))
+        # costs = np.zeros(len(particles))
+        # for i, p in enumerate(particles):
+        #     positions[i, :] = p.x
+        #     costs[i] = p.fbest
+        #
+        # fig, sp = plt.subplots(ndim + 1, 1, figsize=(self.FigWidth, ndim * self.FigHeight / 5))
+        # # Additional plotting logic goes here...
+        #
+        # plt.tight_layout()
         # plt.savefig(self.path + 'initial_parameter.pdf', bbox_inches='tight', dpi=self.my_dpi)
         # plt.close(fig)
 
-
     def plot_results(self):
-
+        """
+        Generate and save summary plots: 
+          1) Cost vs. iteration
+          2) Diversity vs. iteration
+          3) Number of reset particles vs. iteration
+          4) Per-swarm diversity vs. iteration
+        Also saves a simple 'history.dat' file listing the best cost per iteration.
+        """
         from matplotlib import gridspec
 
-        mlp.use('Agg')
+        mlp.use('Agg')  # Use a non-GUI backend suitable for batch mode.
         mlp.rcParams['font.size'] = self.myfontsize
         mlp.rcParams['font.family'] = 'serif'
         mlp.rcParams['font.weight'] = 'light'
 
-        #
-        # COST VS ITERATION
-        #
+        # Main figure
+        fig = plt.figure(figsize=(2.0 * self.FigWidth, 2.0 * self.FigHeight))
+        gs = gridspec.GridSpec(2, 2, height_ratios=[1, 1], width_ratios=[1, 1])
 
-        fig = plt.figure(figsize=(2.*self.FigWidth,2.*self.FigHeight))
-        gs = gridspec.GridSpec(2, 2, height_ratios=[1]*2, width_ratios=[1]*2)
-
+        # 1) Cost vs Iteration (linear or semilog)
         plt.subplot(gs[0])
-        if (max(self.fbest)-min(self.fbest)) < 100:
-            ax = fig.gca()
+        ax = fig.gca()
+        cost_range = max(self.fbest) - min(self.fbest)
+        if cost_range < 100:
             ax.plot(self.iteration, self.fbest, lw=0.75)
-            ax.set_xlabel(r'Iteration no.')
-            ax.set_ylabel(r'Best cost $f(x)$')
-            ax.tick_params(direction='in', which='both') 
-            ax.spines["top"].set_visible(False)
-            ax.spines["right"].set_visible(False)
         else:
-            ax = fig.gca()
             ax.semilogy(self.iteration, self.fbest, lw=0.75)
-            ax.set_xlabel(r'Iteration no.')
-            ax.set_ylabel(r'Best cost $f(x)$')
-            ax.tick_params(direction='in', which='both') 
-            ax.spines["top"].set_visible(False)
-            ax.spines["right"].set_visible(False)
+        ax.set_xlabel(r'Iteration no.')
+        ax.set_ylabel(r'Best cost $f(x)$')
+        ax.tick_params(direction='in', which='both')
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
 
+        # 2) Diversity vs Iteration
         plt.subplot(gs[1])
         ax = fig.gca()
         ax.plot(self.iteration, self.diversity_best, lw=0.75, label='current best position')
@@ -157,82 +221,48 @@ class Logger:
         ax.set_xlabel(r'Iteration no.')
         ax.set_ylabel(r'Diversity')
         plt.legend(loc='upper right')
-        ax.tick_params(direction='in', which='both') 
+        ax.tick_params(direction='in', which='both')
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
 
+        # 3) Number of reset particles
         plt.subplot(gs[2])
         ax = fig.gca()
         ax.plot(self.iteration, self.np_reset, lw=0.75)
         ax.set_xlabel(r'Iteration no.')
         ax.set_ylabel(r'Number of reset particles')
-        ax.tick_params(direction='in', which='both') 
+        ax.tick_params(direction='in', which='both')
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
 
+        # 4) Per-swarm diversity
         plt.subplot(gs[3])
         ax = fig.gca()
-        for iswarm, swarm in enumerate(self.diversity_gbest_swarms):
-            ax.plot(self.iteration, swarm, lw=0.75, label='swarm = ' + str(iswarm))
+        for iswarm, swarm_div in enumerate(self.diversity_gbest_swarms):
+            ax.plot(self.iteration, swarm_div, lw=0.75, label=f'swarm = {iswarm}')
         ax.set_xlabel(r'Iteration no.')
         ax.set_ylabel(r'Diversity')
         plt.legend(loc='upper right')
-        ax.tick_params(direction='in', which='both') 
+        ax.tick_params(direction='in', which='both')
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
 
         plt.tight_layout(w_pad=1.1)
         plt.savefig(self.path + 'DEEM-summary.pdf', bbox_inches='tight', dpi=self.my_dpi)
         plt.close(fig)
-        
+
+        # Save convergence history
+        with open(self.path + 'history.dat', 'w') as f:
+            for val in self.fbest:
+                f.write(f"{val}\n")
+
+        # Additional plotting of best-position evolution (commented out)
+        # ...
+        # Example commented code for final parameter distribution
         #
-        # CONVERGENCE HISTORY
-        #
-        
-        with open(self.path + r'history.dat', 'w') as f:
-          for item in self.fbest:
-              f.write("%s\n" % item)
-
-
-        # #
-        # # COST VS ITERATION
-        # #
-
         # ndim = len(self.upper_bound)
-
-        # fig, sp = plt.subplots(ndim+1, 1, figsize=(self.FigWidth,ndim*self.FigHeight/5))
-
-        # fig.suptitle('Evolution of best particle position $\mathbf{x}=(x_1,...,x_n)$, with $n=$ %d' % (ndim), fontsize=self.myfontsize)
-
-        # # make a first empty plot to create space for the color bar
-        # sp[0].spines["bottom"].set_visible(False)
-        # sp[0].spines["left"].set_visible(False)
-        # sp[0].spines["top"].set_visible(False)
-        # sp[0].spines["right"].set_visible(False)
-        # sp[0].get_yaxis().set_ticks([])
-        # sp[0].get_xaxis().set_ticks([])
-
-        # for idim in range(0,ndim):
-        #     sp[idim+1].plot(self.best_position[:][idim], np.zeros(len(self.best_position[:][idim])), ls='', marker='o', markersize=7, color='gray')
-        #     sp[idim+1].plot(self.best_position[-1][idim], 0., ls='', marker='o', markersize=10, color='C0')
-        #     sp[idim+1].vlines((self.lower_bound[idim],self.upper_bound[idim]), 0., 0.001, color='r', lw=1.5)
-
-        #     sp[idim+1].annotate("{:.2f}".format(self.best_position[-1][idim]),
-        #          (self.best_position[-1][idim],0.), 
-        #          textcoords="offset points", 
-        #          xytext=(0,10),
-        #          ha='center')
-
-        #     sp[idim+1].set_xlim((self.lower_bound[idim],self.upper_bound[idim]))
-        #     sp[idim+1].set_ylim((-0.001,0.001))
-        #     sp[idim+1].get_yaxis().set_ticks([])
-        #     sp[idim+1].set_xlabel(r'Component $x_{{{:2d}}}$'.format(idim+1))
-        #     sp[idim+1].tick_params(direction='in', which='both') 
-        #     sp[idim+1].spines['bottom'].set_position('center')
-        #     sp[idim+1].spines["left"].set_visible(False)
-        #     sp[idim+1].spines["top"].set_visible(False)
-        #     sp[idim+1].spines["right"].set_visible(False)
-
-        # plt.tight_layout(h_pad=1.25)
+        # fig, sp = plt.subplots(ndim + 1, 1, figsize=(self.FigWidth, ndim * self.FigHeight / 5))
+        # # Additional logic goes here...
+        # plt.tight_layout()
         # plt.savefig(self.path + 'final_parameter.pdf', bbox_inches='tight', dpi=self.my_dpi)
         # plt.close(fig)

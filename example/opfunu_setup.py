@@ -66,7 +66,7 @@ if __name__ == "__main__":
     
     name = func.name.split(":")[0]
     
-    f_values = test_func_DEEM(all_funcs_2014[4](ndim = NDim), name, NDim, NRUNS)
+    f_values = test_func_DEEM(all_funcs[4](ndim = NDim), name, NDim, NRUNS)
 
     with open(f'DEEM_CEC2022_{name}_Ndim={NDim}_Nruns={NRUNS}.txt', 'w') as f:
             f.write(", ".join(str(item) for item in f_values))
