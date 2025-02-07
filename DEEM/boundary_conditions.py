@@ -2,13 +2,18 @@
 """
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 #               DEEM - Differential Evolution with Elitism and Multi-populations
-#                               Copyright (C) 2023 Jan Machacek  
+#                            Copyright (C) 2023-2025 Jan Machacek  
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 #
 # author: Jan Machacek, jan-machacek@outlook.com
 # date: 05.02.2023
 #
 # DEEM - Differential Evolution with Elitism and Multi-populations
+#
+# For the theory behind it:
+# Machaček, J., Siegel, S., & Zachert, H. (2025). 
+# DEEM — Differential Evolution with Elitism and Multi-populations. 
+# Swarm and Evolutionary Computation, 92, 101818. https://doi.org/10.1016/j.swevo.2024.101818
 #
 # History:
 # 05.02.2023, J. Machacek - Initial version

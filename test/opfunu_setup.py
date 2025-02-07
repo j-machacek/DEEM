@@ -14,7 +14,7 @@ def test_func_DEEM(func, name, NDim, NRUNS)-> list:
     nparticles_max = 10*NDim
     nparticles_min = 10*NDim
     nswarm_max = 10
-    nswarm_min = 4
+    nswarm_min = 10
     maxiter = 1000
     maxfev = NDim*10000
     nworker = 1
@@ -24,7 +24,7 @@ def test_func_DEEM(func, name, NDim, NRUNS)-> list:
     method_subswarm_reduction = 'linear'
     method_subswarm_creation = 'fitness-focused'
     method_boundary = 'damping-periodic'
-    sampling = 'Random-Uniform'
+    sampling = 'Halton'
 
     f_i = func
     f_values = []
