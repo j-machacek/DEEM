@@ -1,5 +1,5 @@
 #%%
-from DEEM.DEEM import DEEM
+from DEEM.DEEMI import DEEM
 import numpy as np
 import opfunu
 
@@ -14,7 +14,7 @@ def test_func_DEEM(func, name, NDim, NRUNS)-> list:
     nparticles_max = 10*NDim
     nparticles_min = 10*NDim
     nswarm_max = 10
-    nswarm_min = 10
+    nswarm_min = 4
     maxiter = 1000
     maxfev = NDim*10000
     nworker = 1
@@ -24,7 +24,7 @@ def test_func_DEEM(func, name, NDim, NRUNS)-> list:
     method_subswarm_reduction = 'linear'
     method_subswarm_creation = 'fitness-focused'
     method_boundary = 'damping-periodic'
-    sampling = 'Halton'
+    sampling = 'Random-Uniform'
 
     f_i = func
     f_values = []

@@ -159,7 +159,7 @@ class DEEM:
         self.global_reset_condition = False
 
         # Density object for re-initialization
-        self.Density = Density(LB=self.LB, UB=self.UB, num_bins=100 * self.ndim)
+        self.Density = Density(LB=self.LB, UB=self.UB, num_bins=1000*self.ndim)
 
         # Initialize logger
         self.log = Logger(path='./', lower_bound=self.LB, upper_bound=self.UB)
@@ -235,11 +235,10 @@ class DEEM:
         # Check if reinitialization is required
         self.NPRESET = 0
         self.reset_subswarms = False
-        self.global_reset_condition = (self.niter_below_tolerance > self.niter_reset_global
-                                       or self.DIV_NORM_GB < 1e-2)
+        self.global_reset_condition = (self.niter_below_tolerance > self.niter_reset_global or self.DIV_NORM_GB < 1e-2)
         if self.global_reset_condition:
             if (self.iters - self.global_reset_iter) >= self.niter_reset_global:
-                self.NPRESET = self.nparticles - 1
+                self.NPRESET = self.nparticles
                 self.global_reset_iter = self.iters
                 self.reset_subswarms_iter = self.iters
                 self.reset_subswarms = True
@@ -273,117 +272,175 @@ class DEEM:
         for subpop_div_list in self.DIV_GB_SUBPOP:
             subpop_div_list.append(0)
 
-        nparticles_reset_this_iter = 0
-        for isubpop, subpop in enumerate(subpopulations):
-            # Compute subpopulation diversity
-            pos_matrix = np.array([cs.xbest for cs in subpop])
-            current_div = np.mean(np.mean(np.abs(np.median(pos_matrix, axis=0) - pos_matrix), axis=0), axis=0)
-            self.DIV_GB_SUBPOP[isubpop][-1] = current_div
+        if self.global_reset_condition:
 
-            base_div = max(self.DIV_GB_SUBPOP[isubpop][0], 1e-12)
-            div_subpop_norm = max(0., min(1., current_div / base_div))
+            nparticles_reset_this_iter = 0
+            if self.DIV_GB > 0.666:
+                n_exploit = int(np.ceil(0.5 * self.nparticles))
+            elif self.DIV_GB > 0.333:
+                n_exploit = int(np.ceil(0.25 * self.nparticles))
+            else: 
+                n_exploit = max(2, int(np.ceil(0.1 * self.nparticles)))
+            n_explore = self.nparticles - n_exploit
+            # Exploitation: Generate candidates near the global best (self.XBEST)
+            # We add a normally distributed perturbation with a small standard deviation relative
+            # to the overall search space (for example, 10% of the norm of (UB - LB)).
+            for _ in range(n_exploit):
+                #perturbation = np.random.normal(loc=0, scale=0.1 * np.linalg.norm(self.UB - self.LB), size=length)
+                idx_choice = np.random.randint(0, max(1, len(self.archive_elite) // 5))
+                xref = self.archive_elite[idx_choice].x
+                lb_dist = [abs(xx - lbv) for xx, lbv in zip(xref, self.LB)]
+                ub_dist = [abs(xx - ubv) for xx, ubv in zip(xref, self.UB)]
+                dist = [min(ilb,iub) for ilb, iub in zip(lb_dist,ub_dist)]
+                R = xref + dist*np.random.normal(loc=0, scale=0.1, size=self.ndim)
+                R = np.clip(R, self.LB, self.UB)
+                cs = CandidateSolution(x0=R, function=self.function, subpop_index=self.candidates[0].subpop_index)
+                updated_candidates.append(cs)
+                nparticles_reset_this_iter += 1
+            # Exploration: Generate candidates using the density-based mechanism
+            for _ in range(n_explore):
+                R = self.Density.improved_least_visited_position()
+                cs = CandidateSolution(x0=R, function=self.function, subpop_index=self.candidates[0].subpop_index)
+                updated_candidates.append(cs)
+                nparticles_reset_this_iter += 1
+            self.nparticles = len(self.candidates)
 
-            # Subpopulation best (SB)
-            SB = min(subpop, key=lambda cs: cs.fbest).xbest
+        else:
 
-            # Adaptive CR in the subpopulation, based on improved candidate solutions
-            list_cr, list_f, list_f0 = [], [], []
-            for cs in subpop:
-                if cs.improved:
-                    list_cr.append(np.mean(cs.DE_CR))
-                    list_f.append(cs.fbest)
-                    list_f0.append(cs.fbest0)
-            CR = weighted_lehmer_mean(np.array(list_cr), np.array(list_f) / (np.sum(np.abs(np.array(list_f) - np.array(list_f0))) + 1e-12)) if list_cr else 0.5
+            nparticles_reset_this_iter = 0
+            for isubpop, subpop in enumerate(subpopulations):
+                # Compute subpopulation diversity
+                pos_matrix = np.array([cs.xbest for cs in subpop])
+                current_div = np.mean(np.mean(np.abs(np.median(pos_matrix, axis=0) - pos_matrix), axis=0), axis=0)
+                self.DIV_GB_SUBPOP[isubpop][-1] = current_div
 
-            # Update each candidate solution in this subpopulation
-            for cs in subpop:
-                cs.x0 = cs.x.copy()
+                base_div = max(self.DIV_GB_SUBPOP[isubpop][0], 1e-12)
+                div_subpop_norm = max(0., min(1., current_div / base_div))
 
-                # DE_CR ~ Cauchy around CR
-                cs.DE_CR = bounded_cauchy_draw(location=CR, scale=0.2)
+                # Subpopulation best (SB)
+                SB = min(subpop, key=lambda cs: cs.fbest).xbest
 
-                # cs.phi ~ Cauchy around 1.0
-                cs.phi = bounded_cauchy_draw(location=1.0, scale=0.2)
+                # Adaptive CR in the subpopulation, based on improved candidate solutions
+                list_cr, list_f, list_f0 = [], [], []
+                for cs in subpop:
+                    if cs.improved:
+                        list_cr.append(np.mean(cs.DE_CR))
+                        list_f.append(cs.fbest)
+                        list_f0.append(cs.fbest0)
+                CR = weighted_lehmer_mean(np.array(list_cr), np.array(list_f) / (np.sum(np.abs(np.array(list_f) - np.array(list_f0))) + 1e-12)) if list_cr else 0.5
 
-                # Additional random factor phi2 ~ Cauchy around PHI
-                PHI = 0.5 + 0.5 * (1. - self.DIV_NORM_GB)
-                phi2 = bounded_cauchy_draw(location=PHI, scale=0.2)
+                # Update each candidate solution in this subpopulation
+                for ics, cs in enumerate(subpop):
+                    cs.x0 = cs.x.copy()
 
-                if cs.randomize:
-                    nparticles_reset_this_iter += 1
-                    R = self.Density.least_visited_position()
-                    cs = CandidateSolution(x0=R, function=cs.function, subpop_index=cs.subpop_index)
-                elif cs.elite:
-                    if isubpop != 0:
-                        r: List[Position] = []
-                        r.append(Position(self.XBEST, self.FBEST))
+                    # DE_CR ~ Cauchy around CR
+                    cs.DE_CR = bounded_cauchy_draw(location=CR, scale=0.2)
+
+                    # cs.phi ~ Cauchy around 1.0
+                    if isubpop < 2:
+                        PHI = 0.5 + (0.5 - div_subpop_norm)
+                    else:
+                        PHI = 0.50 + (0.5 - self.DIV_NORM_GB)
+                    scale = 0.2
+                    cs.phi = bounded_cauchy_draw(location=PHI, scale=0.1)
+
+                    # Additional random factor phi2 ~ Cauchy around PHI
+                    PHI = 0.50 + (0.5 - self.DIV_NORM_GB)
+                    scale = 0.2
+                    phi2 = bounded_cauchy_draw(location=PHI, scale=scale)
+
+                    if cs.randomize:
+                        nparticles_reset_this_iter += 1
+                        R = self.Density.improved_least_visited_position()
+                        cs = CandidateSolution(x0=R, function=cs.function, subpop_index=cs.subpop_index)
+                    elif cs.elite:
+                        if isubpop != 0:
+                            r: List[Position] = []
+                            r.append(Position(self.XBEST, self.FBEST))
+                            max_tries = 10 * self.nparticles
+                            distinct_positions: List[Position] = []
+                            while len(distinct_positions) < 3 and max_tries > 0:
+                                candidate = np.random.choice(unity_positions)
+                                if (not np.array_equal(candidate.x, cs.xbest)
+                                    and all(not np.array_equal(candidate.x, d.x) for d in distinct_positions)
+                                    and not np.array_equal(candidate.x, r[0].x)):
+                                    distinct_positions.append(candidate)
+                                max_tries -= 1
+                            r.extend(distinct_positions)
+                            r.sort(key=lambda rp: rp.f)
+                            A = (cs.phi*cs.xbest + (1.-cs.phi)*r[0].x + (r[1].x-r[2].x)*phi2) if len(r) >= 3 else cs.xbest
+                            j_rand = np.random.randint(0, self.ndim)
+                            mask = (np.random.rand(length) <= cs.DE_CR) | (np.arange(length) == j_rand)
+                            cs.x = np.where(mask, A, self.XBEST)
+                        else:
+                            lb_dist = [abs(xx - lbv) for xx, lbv in zip(cs.xbest, self.LB)]
+                            ub_dist = [abs(xx - ubv) for xx, ubv in zip(cs.xbest, self.UB)]
+                            dx = np.ones(self.ndim)
+                            lev = Levy(self.ndim, beta=1.99)
+                            for i, ilev in enumerate(lev):
+                                if ilev > 0:
+                                    dx[i] = min(ilev * self.dist_ub_lb[i] / 50, 0.995*ub_dist[i])
+                                else:
+                                    dx[i] = max(ilev * self.dist_ub_lb[i] / 50, -0.995*lb_dist[i])
+                            cs.x = cs.xbest.copy() + dx
+                    else:
+                        # TODO: create hull and check for other cs in other swarms that are near by to be used as random perturbators
+                        r = []
                         max_tries = 10 * self.nparticles
-                        distinct_positions: List[Position] = []
-                        while len(distinct_positions) < 3 and max_tries > 0:
-                            candidate = np.random.choice(unity_positions)
-                            if (not np.array_equal(candidate.x, cs.xbest)
-                                and all(not np.array_equal(candidate.x, d.x) for d in distinct_positions)
-                                and not np.array_equal(candidate.x, r[0].x)):
-                                distinct_positions.append(candidate)
+                        while len(r) < 2 and max_tries > 0:
+                            idx_choice = np.random.randint(1, len(subpop))
+                            candidate = subpop[idx_choice]
+                            if not np.array_equal(candidate.xbest, cs.xbest) and all(not np.array_equal(candidate.xbest, rr.x) for rr in r):
+                                r.append(Position(candidate.xbest, candidate.fbest))
                             max_tries -= 1
-                        r.extend(distinct_positions)
                         r.sort(key=lambda rp: rp.f)
-                        A = (cs.phi * cs.xbest +
-                             (1. - cs.phi) * r[0].x +
-                             (r[1].x - r[2].x) * phi2) if len(r) >= 3 else cs.xbest
+                        A = (cs.phi*cs.xbest + (1.-cs.phi)*SB + (r[0].x-r[1].x)*phi2) if len(r) >= 2 else cs.xbest
                         j_rand = np.random.randint(0, self.ndim)
                         mask = (np.random.rand(length) <= cs.DE_CR) | (np.arange(length) == j_rand)
-                        cs.x = np.where(mask, A, self.XBEST)
-                    else:
-                        lb_dist = [abs(xx - lbv) for xx, lbv in zip(cs.xbest, self.LB)]
-                        ub_dist = [abs(xx - ubv) for xx, ubv in zip(cs.xbest, self.UB)]
-                        dx = np.ones(self.ndim)
-                        lev = Levy(self.ndim, beta=1.99)
-                        for i, ilev in enumerate(lev):
-                            if ilev > 0:
-                                dx[i] = min(ilev * self.dist_ub_lb[i] / 50, ub_dist[i])
-                            else:
-                                dx[i] = max(ilev * self.dist_ub_lb[i] / 50, -lb_dist[i])
-                        cs.x = cs.xbest.copy() + dx
-                else:
-                    r = []
-                    max_tries = 10 * self.nparticles
-                    while len(r) < 2 and max_tries > 0:
-                        idx_choice = np.random.randint(1, len(subpop))
-                        candidate = subpop[idx_choice]
-                        if not np.array_equal(candidate.xbest, cs.xbest) and all(not np.array_equal(candidate.xbest, rr.x) for rr in r):
-                            r.append(Position(candidate.xbest, candidate.fbest))
-                        max_tries -= 1
-                    r.sort(key=lambda rp: rp.f)
-                    A = (cs.phi * cs.xbest + (1. - cs.phi) * SB + (r[0].x - r[1].x) * phi2) if len(r) >= 2 else cs.xbest
-                    j_rand = np.random.randint(0, self.ndim)
-                    mask = (np.random.rand(length) <= cs.DE_CR) | (np.arange(length) == j_rand)
-                    cs.x = np.where(mask, A, SB)
+                        cs.x = np.where(mask, A, SB)
 
-                cs.enforce_BC(lb=self.LB, ub=self.UB, ref=SB, method=self.method_boundary)
-                updated_candidates.append(cs)
+                    cs.enforce_BC(lb=self.LB, ub=self.UB, ref=SB, method=self.method_boundary)
+                    updated_candidates.append(cs)
 
         # Update the candidates list
         self.candidates = deepcopy(updated_candidates)
         self.nparticles_reset = nparticles_reset_this_iter
 
-        # Expand population if a global reset was triggered
+        # Expand population if a global reset was triggered:
         if self.global_reset_condition and self.nparticles < self.nparticles_max:
             dn = self.nparticles_max - self.nparticles
-            for _ in range(dn):
-                if np.random.uniform() >= 0.5:
-                    R = self.Density.least_visited_position()
-                else:
-                    idx_choice = np.random.randint(0, max(1, self.nparticles // 10))
-                    xref = self.candidates[idx_choice].xbest
-                    lb_dist = [abs(xx - lbv) for xx, lbv in zip(xref, self.LB)]
-                    ub_dist = [abs(xx - ubv) for xx, ubv in zip(xref, self.UB)]
-                    rr1 = np.random.uniform(0.0, 0.25, size=length)
-                    rr2 = np.random.uniform(0.0, 0.25, size=length)
-                    R = np.random.uniform(xref - rr1 * lb_dist, xref + rr2 * ub_dist)
+            length = self.ndim  # ensure length is defined
+            # Allocate X % of new candidates for exploitation and (100-X) % for exploration:
+            if self.DIV_GB > 0.75:
+                n_exploit = int(np.ceil(0.75 * dn))
+            elif self.DIV_GB > 0.5:
+                n_exploit = int(np.ceil(0.5 * dn))
+            elif self.DIV_GB > 0.25:
+                n_exploit = int(np.ceil(0.25 * dn))
+            else: 
+                n_exploit = max(2, int(np.ceil(0.1 * dn)))
+            n_explore = dn - n_exploit
+            # Exploitation: Generate candidates near the global best (self.XBEST)
+            # We add a normally distributed perturbation with a small standard deviation relative
+            # to the overall search space (for example, 10% of the norm of (UB - LB)).
+            for _ in range(n_exploit):
+                #perturbation = np.random.normal(loc=0, scale=0.1 * np.linalg.norm(self.UB - self.LB), size=length)
+                idx_choice = np.random.randint(0, max(1, self.nparticles // 20))
+                xref = self.candidates[idx_choice].xbest
+                lb_dist = [abs(xx - lbv) for xx, lbv in zip(xref, self.LB)]
+                ub_dist = [abs(xx - ubv) for xx, ubv in zip(xref, self.UB)]
+                dist = [min(ilb,iub) for ilb, iub in zip(lb_dist,ub_dist)]
+                R = xref + np.random.normal(loc=0, scale=0.1*dist, size=length)
+                R = np.clip(R, self.LB, self.UB)
+                new_cs = CandidateSolution(x0=R, function=self.function, subpop_index=self.candidates[0].subpop_index)
+                self.candidates.append(new_cs)
+            # Exploration: Generate candidates using the density-based mechanism
+            for _ in range(n_explore):
+                R = self.Density.improved_least_visited_position()
                 new_cs = CandidateSolution(x0=R, function=self.function, subpop_index=self.candidates[0].subpop_index)
                 self.candidates.append(new_cs)
             self.nparticles = len(self.candidates)
+
 
     def update_archive(self) -> None:
         """
@@ -406,7 +463,7 @@ class DEEM:
                 unique_candidates.append(deepcopy(pos_obj))
                 unique_xbest.add(xbest_tuple)
         unique_candidates.sort(key=lambda a: a.f)
-        self.archive_elite = unique_candidates[:self.nparticles]
+        self.archive_elite = unique_candidates[:self.nparticles//2]
 
         unique_x = set()
         unique_positions = []
@@ -422,7 +479,7 @@ class DEEM:
                 unique_x.add(x_tuple)
         if len(unique_positions) > self.archive_size:
             np.random.shuffle(unique_positions)
-            unique_positions = unique_positions[:self.archive_size]
+            unique_positions = unique_positions[:2*self.archive_size]
         self.archive = unique_positions
 
     def update(self) -> None:

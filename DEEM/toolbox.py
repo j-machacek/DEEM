@@ -33,7 +33,7 @@
 import numpy as np
 from scipy.stats import norm
 from scipy.special import gamma
-from typing import Sequence, Tuple
+from typing import Sequence
 
 
 def contraction_expansion(method: str, min_val: float, max_val: float, maxiter: int) -> np.ndarray:
@@ -76,17 +76,24 @@ class Density:
         self.LB = np.array(LB, dtype=float)
         self.UB = np.array(UB, dtype=float)
         self.num_bins = num_bins
+        # Create a density matrix for each dimension and bin.
         self.matrix = np.zeros((len(LB), num_bins), dtype=float)
 
     def update_density(self, positions: Sequence[np.ndarray]) -> None:
         """
         Update the density matrix based on candidate positions.
         This version uses vectorized bincounts for speed.
+        
+        Parameters
+        ----------
+        positions : Sequence[np.ndarray]
+            A sequence of positions (each an array of dimension values).
         """
         positions = np.array(positions, dtype=float)
+        # Compute bin indices for each dimension:
         bins = np.floor((positions - self.LB) / (self.UB - self.LB + 1e-32) * self.num_bins).astype(int)
         bins = np.clip(bins, 0, self.num_bins - 1)
-        # For each dimension d, count how many positions fall into each bin
+        # For each dimension d, count how many positions fall into each bin.
         for d in range(positions.shape[1]):
             counts = np.bincount(bins[:, d], minlength=self.num_bins)
             self.matrix[d, :] += counts
@@ -94,11 +101,53 @@ class Density:
     def least_visited_position(self) -> np.ndarray:
         """
         Return a point in the least-visited bin for each dimension.
+        This is the original method: for each dimension, it chooses the bin
+        with the smallest visit count and samples uniformly within it.
+        
+        Returns
+        -------
+        np.ndarray
+            A new candidate position.
         """
         bin_widths = (self.UB - self.LB) / self.num_bins
+        # For each dimension, pick the bin index with the minimal count.
         min_bins_indices = np.argmin(self.matrix, axis=1)
         random_offsets = np.random.rand(len(self.LB)) * bin_widths
         new_position = self.LB + min_bins_indices * bin_widths + random_offsets
+        self.update_density([new_position])
+        return new_position
+
+    def improved_least_visited_position(self) -> np.ndarray:
+        """
+        Return a candidate position sampled via weighted bin sampling.
+        
+        For each dimension, compute a weight for each bin that is inversely 
+        proportional to the visit count (plus a small constant epsilon).
+        Then sample a bin index according to these weights and sample uniformly
+        within the chosen bin. Finally, update the density matrix with the new position.
+        
+        Returns
+        -------
+        np.ndarray
+            A new candidate position.
+        """
+        epsilon = 1e-6
+        bin_widths = (self.UB - self.LB) / self.num_bins
+        new_position = []
+        for d in range(len(self.LB)):
+            # Get visit counts for dimension d.
+            counts = self.matrix[d, :]
+            # Compute weights: bins with fewer visits get higher weight.
+            weights = 1.0 / (counts + epsilon)
+            # Normalize weights to obtain a probability distribution.
+            probabilities = weights / np.sum(weights)
+            # Sample a bin index according to these probabilities.
+            bin_index = np.random.choice(self.num_bins, p=probabilities)
+            # Sample uniformly within the selected bin.
+            offset = np.random.rand() * bin_widths[d]
+            new_val = self.LB[d] + bin_index * bin_widths[d] + offset
+            new_position.append(new_val)
+        new_position = np.array(new_position)
         self.update_density([new_position])
         return new_position
 

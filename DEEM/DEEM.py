@@ -273,95 +273,130 @@ class DEEM:
         for subpop_div_list in self.DIV_GB_SUBPOP:
             subpop_div_list.append(0)
 
-        nparticles_reset_this_iter = 0
-        for isubpop, subpop in enumerate(subpopulations):
-            # Compute subpopulation diversity
-            pos_matrix = np.array([cs.xbest for cs in subpop])
-            current_div = np.mean(np.mean(np.abs(np.median(pos_matrix, axis=0) - pos_matrix), axis=0), axis=0)
-            self.DIV_GB_SUBPOP[isubpop][-1] = current_div
+        if self.global_reset_condition:
 
-            base_div = max(self.DIV_GB_SUBPOP[isubpop][0], 1e-12)
-            div_subpop_norm = max(0., min(1., current_div / base_div))
+            nparticles_reset_this_iter = 0
+            if self.DIV_GB > 0.666:
+                n_exploit = int(np.ceil(0.5 * self.nparticles))
+            elif self.DIV_GB > 0.333:
+                n_exploit = int(np.ceil(0.25 * self.nparticles))
+            else: 
+                n_exploit = max(2, int(np.ceil(0.1 * self.nparticles)))
+            n_explore = self.nparticles - n_exploit
+            # Exploitation: Generate candidates near the global best (self.XBEST)
+            # We add a normally distributed perturbation with a small standard deviation relative
+            # to the overall search space (for example, 10% of the norm of (UB - LB)).
+            for _ in range(n_exploit):
+                #perturbation = np.random.normal(loc=0, scale=0.1 * np.linalg.norm(self.UB - self.LB), size=length)
+                idx_choice = np.random.randint(0, max(1, len(self.archive_elite) // 5))
+                xref = self.archive_elite[idx_choice].x
+                lb_dist = [abs(xx - lbv) for xx, lbv in zip(xref, self.LB)]
+                ub_dist = [abs(xx - ubv) for xx, ubv in zip(xref, self.UB)]
+                dist = [min(ilb,iub) for ilb, iub in zip(lb_dist,ub_dist)]
+                R = xref + dist*np.random.normal(loc=0, scale=0.1, size=self.ndim)
+                R = np.clip(R, self.LB, self.UB)
+                cs = CandidateSolution(x0=R, function=self.function, subpop_index=self.candidates[0].subpop_index)
+                updated_candidates.append(cs)
+                nparticles_reset_this_iter += 1
+            # Exploration: Generate candidates using the density-based mechanism
+            for _ in range(n_explore):
+                R = self.Density.improved_least_visited_position()
+                cs = CandidateSolution(x0=R, function=self.function, subpop_index=self.candidates[0].subpop_index)
+                updated_candidates.append(cs)
+                nparticles_reset_this_iter += 1
+            self.nparticles = len(self.candidates)
 
-            # Subpopulation best (SB)
-            SB = min(subpop, key=lambda cs: cs.fbest).xbest
+        else:
 
-            # Adaptive CR in the subpopulation, based on improved candidate solutions
-            list_cr, list_f, list_f0 = [], [], []
-            for cs in subpop:
-                if cs.improved:
-                    list_cr.append(np.mean(cs.DE_CR))
-                    list_f.append(cs.fbest)
-                    list_f0.append(cs.fbest0)
-            CR = weighted_lehmer_mean(np.array(list_cr), np.array(list_f) / (np.sum(np.abs(np.array(list_f) - np.array(list_f0))) + 1e-12)) if list_cr else 0.5
-
-            # Update each candidate solution in this subpopulation
-            for cs in subpop:
-                cs.x0 = cs.x.copy()
-
-                # DE_CR ~ Cauchy around CR
-                cs.DE_CR = bounded_cauchy_draw(location=CR, scale=0.2)
-
-                # cs.phi ~ Cauchy around 1.0
-                cs.phi = bounded_cauchy_draw(location=1.0, scale=0.2)
-
-                # Additional random factor phi2 ~ Cauchy around PHI
-                PHI = 0.5 + 0.5 * (1. - self.DIV_NORM_GB)
-                phi2 = bounded_cauchy_draw(location=PHI, scale=0.2)
-
-                if cs.randomize:
-                    nparticles_reset_this_iter += 1
-                    R = self.Density.least_visited_position()
-                    cs = CandidateSolution(x0=R, function=cs.function, subpop_index=cs.subpop_index)
-                elif cs.elite:
-                    if isubpop != 0:
-                        r: List[Position] = []
-                        r.append(Position(self.XBEST, self.FBEST))
+            nparticles_reset_this_iter = 0
+            for isubpop, subpop in enumerate(subpopulations):
+                # Compute subpopulation diversity
+                pos_matrix = np.array([cs.xbest for cs in subpop])
+                current_div = np.mean(np.mean(np.abs(np.median(pos_matrix, axis=0) - pos_matrix), axis=0), axis=0)
+                self.DIV_GB_SUBPOP[isubpop][-1] = current_div
+    
+                base_div = max(self.DIV_GB_SUBPOP[isubpop][0], 1e-12)
+                div_subpop_norm = max(0., min(1., current_div / base_div))
+    
+                # Subpopulation best (SB)
+                SB = min(subpop, key=lambda cs: cs.fbest).xbest
+    
+                # Adaptive CR in the subpopulation, based on improved candidate solutions
+                list_cr, list_f, list_f0 = [], [], []
+                for cs in subpop:
+                    if cs.improved:
+                        list_cr.append(np.mean(cs.DE_CR))
+                        list_f.append(cs.fbest)
+                        list_f0.append(cs.fbest0)
+                CR = weighted_lehmer_mean(np.array(list_cr), np.array(list_f) / (np.sum(np.abs(np.array(list_f) - np.array(list_f0))) + 1e-12)) if list_cr else 0.5
+    
+                # Update each candidate solution in this subpopulation
+                for cs in subpop:
+                    cs.x0 = cs.x.copy()
+    
+                    # DE_CR ~ Cauchy around CR
+                    cs.DE_CR = bounded_cauchy_draw(location=CR, scale=0.2)
+    
+                    # cs.phi ~ Cauchy around 1.0
+                    cs.phi = bounded_cauchy_draw(location=1.0, scale=0.2)
+    
+                    # Additional random factor phi2 ~ Cauchy around PHI
+                    PHI = 0.5 + 0.5 * (1. - self.DIV_NORM_GB)
+                    phi2 = bounded_cauchy_draw(location=PHI, scale=0.2)
+    
+                    if cs.randomize:
+                        nparticles_reset_this_iter += 1
+                        R = self.Density.least_visited_position()
+                        cs = CandidateSolution(x0=R, function=cs.function, subpop_index=cs.subpop_index)
+                    elif cs.elite:
+                        if isubpop != 0:
+                            r: List[Position] = []
+                            r.append(Position(self.XBEST, self.FBEST))
+                            max_tries = 10 * self.nparticles
+                            distinct_positions: List[Position] = []
+                            while len(distinct_positions) < 3 and max_tries > 0:
+                                candidate = np.random.choice(unity_positions)
+                                if (not np.array_equal(candidate.x, cs.xbest)
+                                    and all(not np.array_equal(candidate.x, d.x) for d in distinct_positions)
+                                    and not np.array_equal(candidate.x, r[0].x)):
+                                    distinct_positions.append(candidate)
+                                max_tries -= 1
+                            r.extend(distinct_positions)
+                            r.sort(key=lambda rp: rp.f)
+                            A = (cs.phi * cs.xbest +
+                                 (1. - cs.phi) * r[0].x +
+                                 (r[1].x - r[2].x) * phi2) if len(r) >= 3 else cs.xbest
+                            j_rand = np.random.randint(0, self.ndim)
+                            mask = (np.random.rand(length) <= cs.DE_CR) | (np.arange(length) == j_rand)
+                            cs.x = np.where(mask, A, self.XBEST)
+                        else:
+                            lb_dist = [abs(xx - lbv) for xx, lbv in zip(cs.xbest, self.LB)]
+                            ub_dist = [abs(xx - ubv) for xx, ubv in zip(cs.xbest, self.UB)]
+                            dx = np.ones(self.ndim)
+                            lev = Levy(self.ndim, beta=1.99)
+                            for i, ilev in enumerate(lev):
+                                if ilev > 0:
+                                    dx[i] = min(ilev * self.dist_ub_lb[i] / 50, ub_dist[i])
+                                else:
+                                    dx[i] = max(ilev * self.dist_ub_lb[i] / 50, -lb_dist[i])
+                            cs.x = cs.xbest.copy() + dx
+                    else:
+                        r = []
                         max_tries = 10 * self.nparticles
-                        distinct_positions: List[Position] = []
-                        while len(distinct_positions) < 3 and max_tries > 0:
-                            candidate = np.random.choice(unity_positions)
-                            if (not np.array_equal(candidate.x, cs.xbest)
-                                and all(not np.array_equal(candidate.x, d.x) for d in distinct_positions)
-                                and not np.array_equal(candidate.x, r[0].x)):
-                                distinct_positions.append(candidate)
+                        while len(r) < 2 and max_tries > 0:
+                            idx_choice = np.random.randint(1, len(subpop))
+                            candidate = subpop[idx_choice]
+                            if not np.array_equal(candidate.xbest, cs.xbest) and all(not np.array_equal(candidate.xbest, rr.x) for rr in r):
+                                r.append(Position(candidate.xbest, candidate.fbest))
                             max_tries -= 1
-                        r.extend(distinct_positions)
                         r.sort(key=lambda rp: rp.f)
-                        A = (cs.phi * cs.xbest +
-                             (1. - cs.phi) * r[0].x +
-                             (r[1].x - r[2].x) * phi2) if len(r) >= 3 else cs.xbest
+                        A = (cs.phi * cs.xbest + (1. - cs.phi) * SB + (r[0].x - r[1].x) * phi2) if len(r) >= 2 else cs.xbest
                         j_rand = np.random.randint(0, self.ndim)
                         mask = (np.random.rand(length) <= cs.DE_CR) | (np.arange(length) == j_rand)
-                        cs.x = np.where(mask, A, self.XBEST)
-                    else:
-                        lb_dist = [abs(xx - lbv) for xx, lbv in zip(cs.xbest, self.LB)]
-                        ub_dist = [abs(xx - ubv) for xx, ubv in zip(cs.xbest, self.UB)]
-                        dx = np.ones(self.ndim)
-                        lev = Levy(self.ndim, beta=1.99)
-                        for i, ilev in enumerate(lev):
-                            if ilev > 0:
-                                dx[i] = min(ilev * self.dist_ub_lb[i] / 50, ub_dist[i])
-                            else:
-                                dx[i] = max(ilev * self.dist_ub_lb[i] / 50, -lb_dist[i])
-                        cs.x = cs.xbest.copy() + dx
-                else:
-                    r = []
-                    max_tries = 10 * self.nparticles
-                    while len(r) < 2 and max_tries > 0:
-                        idx_choice = np.random.randint(1, len(subpop))
-                        candidate = subpop[idx_choice]
-                        if not np.array_equal(candidate.xbest, cs.xbest) and all(not np.array_equal(candidate.xbest, rr.x) for rr in r):
-                            r.append(Position(candidate.xbest, candidate.fbest))
-                        max_tries -= 1
-                    r.sort(key=lambda rp: rp.f)
-                    A = (cs.phi * cs.xbest + (1. - cs.phi) * SB + (r[0].x - r[1].x) * phi2) if len(r) >= 2 else cs.xbest
-                    j_rand = np.random.randint(0, self.ndim)
-                    mask = (np.random.rand(length) <= cs.DE_CR) | (np.arange(length) == j_rand)
-                    cs.x = np.where(mask, A, SB)
-
-                cs.enforce_BC(lb=self.LB, ub=self.UB, ref=SB, method=self.method_boundary)
-                updated_candidates.append(cs)
+                        cs.x = np.where(mask, A, SB)
+    
+                    cs.enforce_BC(lb=self.LB, ub=self.UB, ref=SB, method=self.method_boundary)
+                    updated_candidates.append(cs)
 
         # Update the candidates list
         self.candidates = deepcopy(updated_candidates)
