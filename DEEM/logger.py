@@ -17,6 +17,12 @@
 # History:
 # 05.02.2023, J. Machacek - Initial version
 # 07.02.2025, J. Machacek - Refactored code
+# 23.06.2026, J. Machacek - A) save() no longer retains the full candidate objects
+#                              every iteration (memory grew with maxiter*nparticles
+#                              and pinned the objective); only the population size is
+#                              kept. B) plot_results() guards against a changing
+#                              number of subpopulations (ragged diversity series) and
+#                              against empty histories, so logging can never abort a run.
 #
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 """
@@ -140,7 +146,9 @@ class Logger:
         self.iteration.append(iteration)
         self.fbest.append(fbest)
         self.best_position.append(best_position)
-        self.generations.append(particles)
+        # 23.06.2026, J. Machacek - keep only the population size, not the heavy
+        # candidate objects (avoids unbounded memory growth and pinning the objective).
+        self.generations.append(len(particles) if particles is not None else 0)
         self.nElite.append(nElite)
         self.np_reset.append(np_reset)
         self.diversity_best.append(DIV_best)
@@ -229,11 +237,19 @@ class Logger:
 
         # 4) Per-subpopulation diversity vs. Iteration
         ax4 = fig.add_subplot(gs[3])
+        # 23.06.2026, J. Machacek - the number of subpopulations may change over the
+        # run, so each series can be shorter than the iteration axis. Plot only the
+        # matching tail to avoid a length-mismatch error.
+        it = np.asarray(self.iteration)
         for i, div in enumerate(self.diversity_gbest_swarms):
-            ax4.plot(self.iteration, div, lw=0.75, label=f'subpop {i}')
+            div = np.asarray(div)
+            m = min(len(div), len(it))
+            if m > 0:
+                ax4.plot(it[-m:], div[-m:], lw=0.75, label=f'subpop {i}')
         ax4.set_xlabel('Iteration no.')
         ax4.set_ylabel('Diversity')
-        ax4.legend(loc='upper right')
+        if self.diversity_gbest_swarms:
+            ax4.legend(loc='upper right')
         ax4.tick_params(direction='in')
         ax4.spines["top"].set_visible(False)
         ax4.spines["right"].set_visible(False)

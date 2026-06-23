@@ -2,7 +2,7 @@
 """
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 #               DEEM - Differential Evolution with Elitism and Multi-populations
-#                            Copyright (C) 2023-2025 Jan Machacek  
+#                            Copyright (C) 2023-2025 Jan Machacek
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 #
 # author: Jan Machacek, jan-machacek@outlook.com
@@ -11,8 +11,8 @@
 # DEEM - Differential Evolution with Elitism and Multi-populations
 #
 # For the theory behind it:
-# Machaček, J., Siegel, S., & Zachert, H. (2025). 
-# DEEM — Differential Evolution with Elitism and Multi-populations. 
+# Machaček, J., Siegel, S., & Zachert, H. (2025).
+# DEEM — Differential Evolution with Elitism and Multi-populations.
 # Swarm and Evolutionary Computation, 92, 101818. https://doi.org/10.1016/j.swevo.2024.101818
 #
 # This module merges the functionality of the former swarm and particle
@@ -20,15 +20,29 @@
 #   - CandidateSolution: Represents a single candidate solution.
 #   - Population: Manages groups of candidate solutions (subpopulations)
 #     for the DEEM algorithm.
-# 
+#
 # Candidate solutions are abbreviated as 'cs' in the code.
-# 
+#
 # History:
 # 07.02.2025, J. Machacek - Initial version (merge of swarm.py and particles.py)
+# 23.06.2026, J. Machacek - Robustness/performance pass:
+#                           A) Added CandidateSolution.__deepcopy__ that keeps the
+#                              objective 'function' BY REFERENCE. The previous
+#                              deepcopy of the candidate list in the main loop
+#                              deep-copied the callable, which for a stateful
+#                              objective (e.g. a numgeo-ACT wrapper holding the FE
+#                              model) duplicated the whole model state per candidate
+#                              and per iteration and silently broke object identity.
+#                           B) Guarded the sigmoid/linear sub-population reduction
+#                              against a 0**(-k) ZeroDivisionError at x_fraction in
+#                              {0,1} (occurred on the very first iteration whenever
+#                              nswarm_min != nswarm_max).
+#                           C) Replaced the O(n^2) array re-construction inside
+#                              '_create_equally_distributed_subpops' by a single
+#                              pre-built position matrix with an availability mask.
 #
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 """
-#!/usr/bin/env python3
 
 import numpy as np
 from copy import deepcopy
@@ -64,6 +78,31 @@ class CandidateSolution:
 
         self.DE_CR = np.random.uniform()
         self.phi = np.random.uniform()
+
+    # 23.06.2026, J. Machacek - keep the (possibly heavy / stateful) objective
+    #                           by reference when the candidate is deep-copied.
+    def __deepcopy__(self, memo):
+        """
+        Custom deep-copy that clones only the lightweight numeric state of the
+        candidate and keeps the 'function' attribute BY REFERENCE.
+
+        Rationale: the main DEEM loop deep-copies the candidate list once per
+        iteration. The default deepcopy would recurse into 'function'. For a
+        stateful callable (e.g. a wrapper holding a finite-element model, as in
+        numgeo-ACT) this duplicates the entire model state for every candidate
+        and every iteration, wasting memory/time and breaking object identity.
+        """
+        cls = self.__class__
+        new = cls.__new__(cls)
+        memo[id(self)] = new
+        for key, val in self.__dict__.items():
+            if key == 'function':
+                new.function = val              # shared reference, not copied
+            elif isinstance(val, np.ndarray):
+                new.__dict__[key] = val.copy()
+            else:
+                new.__dict__[key] = deepcopy(val, memo)
+        return new
 
     def reset(self, x0: np.ndarray) -> None:
         """
@@ -168,12 +207,18 @@ class Population:
     def _update_number_of_subpops(self, x_fraction: float) -> None:
         """
         Update the number of subpopulations based on x_fraction.
+
+        23.06.2026, J. Machacek - x_fraction is clamped to (eps, 1-eps) to avoid a
+        0**(-k) ZeroDivisionError in the sigmoid laws at the first/last iteration.
         """
         nmin, nmax = self.nswarms_min, self.nswarms_max
         method = self.method_subpop_reduction
         if nmin == nmax:
             self.nswarms = nmin
             return
+        # clamp to keep the rational map x/(1-x) finite and non-zero
+        eps = 1e-9
+        x_fraction = min(max(x_fraction, eps), 1.0 - eps)
         if method == 'sigmoid-2':
             val = 1. - (1. / (1. + (x_fraction / (1. - x_fraction)) ** -2))
             self.nswarms = int(round(nmin + (nmax - nmin) * val))
@@ -187,6 +232,8 @@ class Population:
             self.nswarms = int(round(nmax * (ratio ** x_fraction)))
         elif method == 'constant':
             self.nswarms = nmax
+        # guard against degenerate rounding
+        self.nswarms = int(min(max(self.nswarms, nmin), nmax))
 
     def _create_new_subpops(self, sorted_candidates: List[CandidateSolution], LB: np.ndarray, UB: np.ndarray) -> List[List[CandidateSolution]]:
         """
@@ -224,21 +271,36 @@ class Population:
     def _create_equally_distributed_subpops(self, sorted_candidates: List[CandidateSolution]) -> List[List[CandidateSolution]]:
         """
         Create subpopulations by distributing the top candidates as leaders,
-        then assign the remaining based on closeness (using vectorized distance computation).
+        then assigning the remaining candidates round-robin to the nearest leader.
+
+        23.06.2026, J. Machacek - the position matrix is now built ONCE and an
+        availability mask is used, replacing the previous O(n^2) re-construction
+        of the candidate array on every single assignment.
         """
-        leaders = [sorted_candidates.pop(0) for _ in range(self.nswarms)]
+        n_leaders = min(self.nswarms, len(sorted_candidates))
+        leaders = [sorted_candidates[i] for i in range(n_leaders)]
+        rest = sorted_candidates[n_leaders:]
         subpops = [[leader] for leader in leaders]
-        while sorted_candidates:
-            for sp in subpops:
-                if not sorted_candidates:
-                    break
-                leader = sp[0]
-                # Vectorized distance computation from leader.xbest to all remaining candidates
-                candidates_array = np.array([cs.xbest for cs in sorted_candidates])
-                leader_arr = leader.xbest.reshape(1, -1)
-                distances = np.linalg.norm(candidates_array - leader_arr, axis=1)
-                idx = np.argmin(distances)
-                sp.append(sorted_candidates.pop(idx))
+        if not rest:
+            return subpops
+
+        rest_pos = np.array([cs.xbest for cs in rest], dtype=float)     # (m, ndim)
+        leader_pos = np.array([ld.xbest for ld in leaders], dtype=float)  # (k, ndim)
+        available = np.ones(len(rest), dtype=bool)
+
+        # round-robin nearest assignment using a single distance matrix
+        sp_idx = 0
+        n_remaining = len(rest)
+        while n_remaining > 0:
+            sp = subpops[sp_idx % n_leaders]
+            ld = leader_pos[sp_idx % n_leaders]
+            d = np.linalg.norm(rest_pos - ld, axis=1)
+            d[~available] = np.inf
+            j = int(np.argmin(d))
+            sp.append(rest[j])
+            available[j] = False
+            n_remaining -= 1
+            sp_idx += 1
         return subpops
 
     def _create_fitness_focused_subpops(self, sorted_candidates: List[CandidateSolution],
@@ -262,16 +324,13 @@ class Population:
             extra = 1 if remainder > 0 else 0
             if remainder > 0:
                 remainder -= 1
-            # Vectorized distances from best_candidate.xbest to all remaining candidates
             if sorted_candidates:
                 candidates_array = np.array([cs.xbest for cs in sorted_candidates])
                 best_arr = best_candidate.xbest.reshape(1, -1)
                 distances = np.linalg.norm(candidates_array - best_arr, axis=1)
                 n_to_assign = n_per_subpop + extra - 1
-                # Get indices of the n smallest distances
                 if len(distances) > 0:
                     idxs = np.argsort(distances)[:n_to_assign]
-                    # Append candidates in order and remove them
                     selected = [sorted_candidates[i] for i in sorted(idxs, reverse=True)]
                     for cs in selected:
                         subpop.insert(1, cs)

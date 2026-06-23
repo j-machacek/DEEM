@@ -25,6 +25,16 @@
 # History:
 # 05.02.2023, J. Machacek - Initial version
 # 07.02.2025, J. Machacek - Refactored code, added docstrings
+# 23.06.2026, J. Machacek - Added helpers for the improved restart and adaptation:
+#                           - success_history_lehmer: SHADE-style Lehmer mean of
+#                             successful control parameters, weighted by the
+#                             achieved improvement (delta f), not by absolute
+#                             fitness as before.
+#                           - space_filling_sample: scrambled low-discrepancy
+#                             (Sobol) fill of the search box for the restart.
+#                           - covariance_seed: EDA-style Gaussian seeding around an
+#                             elite using a shrinkage covariance, so that parameter
+#                             interdependencies are respected during the restart.
 #
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 """
@@ -249,3 +259,116 @@ def weighted_lehmer_mean(values: np.ndarray, weights: np.ndarray) -> float:
     numerator = np.sum(weights * values ** 2)
     denominator = np.sum(weights * values)
     return float(numerator / denominator) if denominator != 0.0 else 0.5
+
+def success_history_lehmer(values: np.ndarray, improvements: np.ndarray,
+                           fallback: float = 0.5) -> float:
+    """
+    SHADE-style weighted Lehmer mean of successful control parameters.
+
+    Each successful control value (e.g. CR or phi) is weighted by the *normalised
+    improvement* it produced, w_k = df_k / sum_j df_j, with df_k = max(0, f_old - f_new).
+    The weighted Lehmer mean (sum w v^2 / sum w v) biases the next generation
+    towards the more productive values, exactly as in JADE/SHADE.
+
+    Parameters
+    ----------
+    values : np.ndarray
+        Control values of the successful candidates.
+    improvements : np.ndarray
+        Per-candidate improvement df_k (>= 0).
+    fallback : float
+        Returned when there is no usable success information.
+
+    Returns
+    -------
+    float
+        The adapted control value.
+    """
+    values = np.asarray(values, dtype=float)
+    improvements = np.asarray(improvements, dtype=float)
+    if values.size == 0:
+        return fallback
+    w = np.clip(improvements, 0.0, None)
+    s = np.sum(w)
+    if s <= 0.0:
+        # successes without measurable improvement -> use the plain mean
+        return float(np.mean(values))
+    w = w / s
+    denom = np.sum(w * values)
+    if denom == 0.0:
+        return fallback
+    return float(np.sum(w * values ** 2) / denom)
+
+
+def space_filling_sample(n: int, LB: np.ndarray, UB: np.ndarray) -> np.ndarray:
+    """
+    Draw n scrambled low-discrepancy (Sobol) points in the box [LB, UB].
+
+    Falls back to uniform random sampling if scipy's QMC engine is unavailable.
+    """
+    LB = np.asarray(LB, dtype=float); UB = np.asarray(UB, dtype=float)
+    if n <= 0:
+        return np.empty((0, len(LB)))
+    try:
+        from scipy.stats.qmc import Sobol
+        eng = Sobol(d=len(LB), scramble=True)
+        u = eng.random(n)
+    except Exception:
+        u = np.random.rand(n, len(LB))
+    return LB + u * (UB - LB)
+
+
+def covariance_seed(elite: np.ndarray, members: np.ndarray,
+                    LB: np.ndarray, UB: np.ndarray, n: int,
+                    shrink: float = 0.25) -> np.ndarray:
+    """
+    EDA-style Gaussian seeding around an elite position.
+
+    A shrinkage covariance is estimated from the basin 'members' and used to draw
+    n correlated samples centred on 'elite'. This respects parameter inter-
+    dependencies (highlighted in the DEEM paper for hypoplastic calibration),
+    unlike per-dimension-independent bin sampling.
+
+    Parameters
+    ----------
+    elite : np.ndarray
+        Centre of the basin (shape (ndim,)).
+    members : np.ndarray
+        Positions defining the basin shape (shape (m, ndim)); may be empty.
+    LB, UB : np.ndarray
+        Search-space bounds (used to scale the regulariser and to clip).
+    n : int
+        Number of samples to draw.
+    shrink : float
+        Shrinkage intensity towards a diagonal target in [0, 1].
+
+    Returns
+    -------
+    np.ndarray
+        Array of shape (n, ndim), clipped to [LB, UB].
+    """
+    LB = np.asarray(LB, dtype=float); UB = np.asarray(UB, dtype=float)
+    elite = np.asarray(elite, dtype=float)
+    ndim = len(elite)
+    span = UB - LB
+    span[span == 0.0] = 1.0
+    if n <= 0:
+        return np.empty((0, ndim))
+
+    if members is not None and len(members) >= 2:
+        cov = np.cov(np.asarray(members, dtype=float).T)
+        cov = np.atleast_2d(cov)
+    else:
+        cov = np.zeros((ndim, ndim))
+
+    # diagonal shrinkage target: a fraction of the box span
+    diag_target = np.diag((0.05 * span) ** 2)
+    cov = (1.0 - shrink) * cov + shrink * diag_target
+    # tiny ridge for numerical stability
+    cov += np.eye(ndim) * (1e-12 * np.mean(span) ** 2 + 1e-300)
+
+    try:
+        samples = np.random.multivariate_normal(elite, cov, size=n)
+    except Exception:
+        samples = elite + np.random.normal(size=(n, ndim)) * (0.05 * span)
+    return np.clip(samples, LB, UB)
