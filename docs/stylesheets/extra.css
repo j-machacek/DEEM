@@ -1,0 +1,10 @@
+/* Slightly wider content area so equations are not cramped. */
+.md-grid {
+  max-width: 1180px;
+}
+
+/* Let displayed equations scroll horizontally on narrow screens. */
+.arithmatex {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
