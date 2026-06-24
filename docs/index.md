@@ -1,15 +1,14 @@
 ---
-title: Home
+title: HDifferential Evolution with Elitism and Multi-populationse
 ---
+
 <div class="deem-hero" markdown>
 ![DEEM — Differential Evolution with Elitism and Multi-populations](logo/deem-logo-light.png){ .deem-logo-light }
 ![DEEM — Differential Evolution with Elitism and Multi-populations](logo/deem-logo-dark.png){ .deem-logo-dark }
 </div>
 
-**DEEM** — *Differential Evolution with Elitism and Multi-populations* — is a
-heuristic optimiser of the Differential Evolution (DE) family. It combines three
-ideas to improve convergence speed, accuracy and reproducibility on rugged,
-multi-modal objectives:
+**DEEM** is a heuristic optimiser of the Differential Evolution (DE) family. It combines three
+ideas to improve convergence speed, accuracy and reproducibility on rugged, multi-modal objectives:
 
 - **Sub-populations.** The population is split into sub-populations, each led by
   an *elite* candidate solution, which balances exploration and exploitation.
