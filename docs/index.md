@@ -112,3 +112,8 @@ multi-modal and composite problems. See the [paper][paper] for the full study an
 ## License and authorship
 
 DEEM is developed by Jan Machaček, Institute of Geotechnics, Technical University of Darmstadt.
+
+It is released under the **BSD 3-Clause License** — a permissive licence that allows
+use, modification and redistribution (including in commercial or closed-source work)
+provided the copyright notice is retained and the authors' names are not used to
+endorse derived products without permission. See [License](license.md) for details.

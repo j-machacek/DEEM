@@ -38,6 +38,8 @@ nav = [
     ] },
     { "DEEMI (improved)" = "deemi.md" },
     { "Examples" = [
+        "examples/configurations.md",
+        "examples/animation.md",
         "examples/benchmarks.md",
         "examples/calibration.md",
     ] },
@@ -47,6 +49,7 @@ nav = [
         "reference/modules.md",
     ] },
     { "Citation" = "citation.md" },
+    { "License" = "license.md" },
 ]
 
 [project.theme]

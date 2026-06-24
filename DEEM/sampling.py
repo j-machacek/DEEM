@@ -1,3 +1,9 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2024-2026 Jan Machaček
+#
+# This file is part of DEEM, released under the BSD 3-Clause License.
+# See the LICENSE file in the project root for the full license text.
+
 """
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 #               DEEM - Differential Evolution with Elitism and Multi-populations
@@ -55,18 +61,20 @@ def latin_hypercube_sampling(nparticles: int, dim: int,
     """
     lower_bound = np.asarray(lower_bound)
     upper_bound = np.asarray(upper_bound)
-    # Generate nparticles+1 equally spaced cuts in [0,1]
+    # One sample per stratum: nparticles equal-width strata in [0, 1)
     cut = np.linspace(0, 1, nparticles + 1)
-    # Generate random numbers in [0,1] for each candidate and dimension
+    a = cut[:nparticles]            # lower edge of each stratum, shape (nparticles,)
+    b = cut[1:nparticles + 1]       # upper edge of each stratum, shape (nparticles,)
     u = np.random.rand(nparticles, dim)
-    # Each candidate lies in an interval defined by consecutive cuts
-    a = cut[:nparticles, np.newaxis]    # shape: (nparticles, 1)
-    b = cut[1:nparticles+1, np.newaxis]   # shape: (nparticles, 1)
-    samples = u * (b - a) + a
-    # Permute the rows randomly (vectorized)
-    permuted_samples = samples[np.random.permutation(nparticles)]
+    # Stratified positions, then permute EACH dimension independently so the
+    # dimensions are uncorrelated (true Latin Hypercube). Permuting whole rows
+    # instead would leave all dimensions perfectly correlated (points on the
+    # diagonal) -- 16.06.2026, J. Machacek (bug fix).
+    samples = u * (b - a)[:, np.newaxis] + a[:, np.newaxis]
+    for j in range(dim):
+        samples[:, j] = samples[np.random.permutation(nparticles), j]
     # Scale the samples to the provided bounds
-    return lower_bound + permuted_samples * (upper_bound - lower_bound)
+    return lower_bound + samples * (upper_bound - lower_bound)
 
 
 def random_uniform(nparticles: int, dim: int, 
