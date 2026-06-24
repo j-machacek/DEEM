@@ -76,8 +76,15 @@ Numerical helpers used across the algorithm, including:
 
 Optional, used only by `DEEMI` when a surrogate is supplied:
 
-- **`RBFSurrogate`** — a regularised radial-basis-function surrogate.
-- **`SurrogateManager`** — selects which candidates to evaluate on the real
-  objective (`select`) and records observations (`observe`), with a feasibility
-  classifier that biases evaluations away from penalty regions. See the
-  [DEEMI reference](deemi.md#surrogate-manager).
+- **`RBFSurrogate`** — a regularised radial-basis-function surrogate (predict + novelty).
+- **`SurrogateManager`** — RBF-based controller: selects which candidates to
+  evaluate on the real objective (`select`) and records observations (`observe`),
+  with a feasibility classifier that biases evaluations away from penalty regions.
+- **`GPSurrogate`** — a Gaussian-process surrogate (squared-exponential kernel)
+  that additionally returns a predictive standard deviation (`predict` + `predict_std`).
+- **`GPSurrogateManager`** — GP-based controller with the same interface, selecting
+  by a Lower-Confidence-Bound rule $\mu - \kappa\sigma$ to balance promising and
+  uncertain candidates.
+
+See the [DEEMI reference](deemi.md#surrogate-managers) for the manager arguments.
+

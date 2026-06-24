@@ -28,7 +28,7 @@ nav = [
         "getting-started/installation.md",
         "getting-started/quickstart.md",
     ] },
-    { "Theory" = [
+    { "Theory (DEEM)" = [
         "theory/index.md",
         "theory/sub-populations.md",
         "theory/position-updates.md",
@@ -42,8 +42,8 @@ nav = [
         "examples/calibration.md",
     ] },
     { "API reference" = [
-        "reference/deem.md",
         "reference/deemi.md",
+        "reference/deem.md",
         "reference/modules.md",
     ] },
     { "Citation" = "citation.md" },
@@ -51,6 +51,8 @@ nav = [
 
 [project.theme]
 variant = "modern"
+logo = "logo/deem-mark-badge.svg"
+favicon = "logo/deem-mark-badge.png"
 features = [
     "navigation.tabs",
     "navigation.sections",
@@ -109,3 +111,13 @@ alternate_style = true
 
 [project.markdown_extensions.pymdownx.arithmatex]
 generic = true
+
+# Material/Lucide/FontAwesome icon shortcodes, e.g. :material-rocket-launch:
+[project.markdown_extensions.pymdownx.emoji]
+emoji_index = "zensical.extensions.emoji.twemoji"
+emoji_generator = "zensical.extensions.emoji.to_svg"
+
+# Remove the "Made with Zensical" notice from the footer
+[project.extra]
+generator = false
+

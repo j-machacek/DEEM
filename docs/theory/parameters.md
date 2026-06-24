@@ -42,17 +42,17 @@ For the population size, the paper recommends a range of
 $5\,n_D \le n_c \le 15\,n_D$. In the CEC benchmark study, $n_c = 10\,n_D$ was used,
 with termination at $n_f^{max} = 1000\,n_D$ evaluations and $n_D = 10$ dimensions.
 
-## Recommended defaults (from the paper)
+## Recommended defaults
 
 These values were used consistently throughout the published study and are a good
 starting point:
 
-- **Number of sub-populations:** $n_s = 10 \rightarrow 4$
+- **Number of sub-populations:** $n_s = 4 \rightarrow 4$
 - **Diversity threshold:** $\varepsilon^{DIV} = 10^{-2}$
 - **Restart threshold:** $n_i^{res} = n_i^{max}/5$
 - **Lévy-flight step size:** $\beta = 1.99$
 - **$\phi_2$ approach:** Cauchy variant (recommended for $n_D > 10$)
-- **Population size:** $5\,n_D \le n_c \le 15\,n_D$ (study used $10\,n_D$)
+- **Population size:** $5\,n_D \le n_c \le 15\,n_D$
 
 !!! tip "Where these are set"
 

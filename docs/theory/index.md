@@ -15,6 +15,8 @@ $$
 The set of all $n_c$ candidate solutions forms the population
 $\mathbf{P}=\{c^1, c^2, \dots, c^{n_c}\}$.
 
+---
+
 ## The three core ideas
 
 **Sub-populations.**
@@ -43,6 +45,8 @@ When the search stagnates, candidate solutions (except the global best) are
 re-initialised into the least-visited regions of the search space. See
 [Re-initialisation](reinitialisation.md).
 
+---
+
 ## The optimisation loop
 
 Each iteration $i$ performs the following steps:
@@ -66,10 +70,16 @@ The pages in this section describe each component and give the governing
 equations. The two parameter tables with the recommended default values are
 collected on the [Parameters](parameters.md) page.
 
-!!! info "Notation"
+---
 
-    $\mathbf{x}$ — position; $\overline{x}_{iD}$ — position scaled to $[0,1]$ in
-    dimension $iD$; $LB_{iD}, UB_{iD}$ — lower / upper bound; $n_D$ — number of
-    dimensions; $n_c$ — population size; $n_s$ — number of sub-populations;
-    $CR$ — crossover rate; $\phi_1,\phi_2$ — blend coefficients;
-    $DIV$ — normalised population diversity.
+## Notation
+
+- $\mathbf{x}$ — position
+- $\overline{x}_{iD}$ — position scaled to $[0,1]$ in dimension $iD$ 
+- $LB_{iD}, UB_{iD}$ — lower / upper bound 
+- $n_D$ — number of dimensions 
+- $n_c$ — population size 
+- $n_s$ — number of sub-populations 
+- $CR$ — crossover rate 
+- $\phi_1,\phi_2$ — blend coefficients 
+- $DIV$ — normalised population diversity 

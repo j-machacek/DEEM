@@ -81,7 +81,13 @@ result = optimizer.update()
 The result attributes `XBEST`, `FBEST` and `fev` are also available, as in the
 base class.
 
-## Surrogate manager
+## Surrogate managers
+
+Two interchangeable surrogate controllers are bundled in `DEEM.surrogate`. Both
+expose the same `select(optimizer, candidates)` / `observe(evaluated)` interface
+and a kNN feasibility bias; they differ in the underlying model.
+
+### `SurrogateManager` (RBF)
 
 ```python
 from DEEM.surrogate import SurrogateManager
@@ -98,4 +104,31 @@ SurrogateManager(LB, UB, eval_frac=0.5, explore_frac=0.3,
 | `min_train` | `40` | Minimum number of observations before the surrogate is used. |
 | `refit_every` | `10` | Refit the surrogate every *n* iterations. |
 
-Pass the manager to `DEEM(..., surrogate=SurrogateManager(LB, UB))`.
+A regularised radial-basis-function interpolant; ranks candidates by predicted
+value plus a nearest-neighbour novelty score.
+
+### `GPSurrogateManager` (Gaussian process)
+
+```python
+from DEEM.surrogate import GPSurrogateManager
+
+GPSurrogateManager(LB, UB, eval_frac=0.5, explore_frac=0.3,
+                   kappa=1.5, min_train=40, refit_every=10)
+```
+
+| Argument | Default | Description |
+| -------- | ------- | ----------- |
+| `LB`, `UB` | — | Search-space bounds. |
+| `eval_frac` | `0.5` | Fraction of candidates evaluated on the real objective each iteration. |
+| `explore_frac` | `0.3` | Fraction of the budget reserved for the most *uncertain* candidates. |
+| `kappa` | `1.5` | Exploration weight of the Lower-Confidence-Bound acquisition $\mu - \kappa\sigma$. |
+| `min_train` | `40` | Minimum number of observations before pre-screening starts. |
+| `refit_every` | `10` | Refit the GP every *n* new observations. |
+
+A Gaussian process with a squared-exponential kernel; selects by the
+Lower-Confidence-Bound rule, so it evaluates candidates that are either promising
+(low posterior mean) or uncertain (high posterior std).
+
+Pass either manager to `DEEM(..., surrogate=...)`. Both depend only on numpy and
+scipy.
+

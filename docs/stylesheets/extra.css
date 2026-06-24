@@ -8,3 +8,16 @@
   overflow-x: auto;
   overflow-y: hidden;
 }
+
+/* Home-page logo hero (light/dark variants swapped by colour scheme). */
+.deem-hero {
+  text-align: center;
+  margin: 0.5rem 0 2rem;
+}
+.deem-hero img {
+  width: min(460px, 82%);
+  height: auto;
+}
+.deem-logo-dark { display: none; }
+[data-md-color-scheme="slate"] .deem-logo-light { display: none; }
+[data-md-color-scheme="slate"] .deem-logo-dark  { display: inline-block; }

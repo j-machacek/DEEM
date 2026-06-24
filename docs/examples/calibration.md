@@ -90,7 +90,9 @@ mechanism, or by running serially with `nworkers=1`.
 For very costly objectives, `DEEMI` offers two opt-in mechanisms to spend the
 evaluation budget more carefully:
 
-- **Surrogate pre-screening** (`surrogate=SurrogateManager(LB, UB)`) — evaluate
+- **Surrogate pre-screening** (`surrogate=SurrogateManager(LB, UB)` for the RBF
+  model, or `surrogate=GPSurrogateManager(LB, UB)` for the Gaussian process) —
+  evaluate
   only the most promising trial vectors on the real objective each iteration.
 - **Evaluation cache** (`cache_tol=1e-6`) — never re-simulate a position that has
   already been evaluated (useful when penalty-triggering points recur).

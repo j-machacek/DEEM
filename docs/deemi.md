@@ -38,19 +38,36 @@ The exploration/exploitation balance then responds to what is actually working.
 
 For expensive objectives, an optional surrogate model can rank the trial vectors
 each iteration so that **only the most promising fraction (plus an exploration
-quota) is evaluated on the real objective**. The bundled
-`DEEM.surrogate.SurrogateManager` uses a regularised RBF surrogate and a
-feasibility classifier that biases evaluations away from regions that previously
-returned the penalty value (useful when the model is numerically unstable for some
-parameter sets).
+quota) is evaluated on the real objective**. Two surrogate managers are bundled in
+`DEEM.surrogate`, both with a feasibility classifier that biases evaluations away
+from regions that previously returned the penalty value (useful when the model is
+numerically unstable for some parameter sets):
+
+- **`SurrogateManager`** — a regularised **radial-basis-function (RBF)**
+  interpolant. Fast and a good general default; ranks candidates by predicted value
+  plus a nearest-neighbour novelty term.
+- **`GPSurrogateManager`** — a **Gaussian-process (GP)** surrogate with a
+  squared-exponential kernel. Unlike the RBF, it returns a predictive *variance*,
+  so it selects with a Lower-Confidence-Bound rule, $\mu(x) - \kappa\,\sigma(x)$,
+  evaluating candidates that are either promising (low predicted cost) or uncertain
+  (poorly covered by past evaluations). This is the classic surrogate-assisted /
+  Bayesian-optimisation acquisition and tends to explore more deliberately on
+  expensive, multi-modal problems.
+
+Both share the same interface, so they are interchangeable:
 
 ```python
 from DEEM.DEEMI import DEEM
-from DEEM.surrogate import SurrogateManager
+from DEEM.surrogate import SurrogateManager, GPSurrogateManager
 import numpy as np
 
 LB = np.array([0.0] * 8); UB = np.array([1.0] * 8)
-sm  = SurrogateManager(LB, UB, eval_frac=0.5, explore_frac=0.3)
+
+# RBF (default choice):
+sm = SurrogateManager(LB, UB, eval_frac=0.5, explore_frac=0.3)
+
+# or a Gaussian process with uncertainty-aware selection:
+sm = GPSurrogateManager(LB, UB, eval_frac=0.5, explore_frac=0.3, kappa=1.5)
 
 opt = DEEM(my_expensive_objective, LB, UB,
            nparticles_max=50, nparticles_min=50,
@@ -58,6 +75,10 @@ opt = DEEM(my_expensive_objective, LB, UB,
            surrogate=sm)
 opt.update()
 ```
+
+Both are dependency-light (numpy + scipy only). On cheap analytic functions
+surrogate pre-screening is not worthwhile — its purpose is the expensive-objective
+regime (≈40 min per evaluation), where skipping evaluations dominates the cost.
 
 ### Evaluation cache — `cache_tol`
 

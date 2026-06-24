@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="DEEM mark">
+  <defs>
+    <linearGradient id="valley" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5c6bc0" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#5c6bc0" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <!-- objective landscape: a local minimum (left) and a deeper global minimum (right) -->
+  <path d="M6 16 C 12 30, 16 40, 22 39 C 28 38, 30 27, 35 27 C 41 27, 43 48, 49 49 C 54 50, 56 30, 58 22"
+        fill="none" stroke="#3f51b5" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M6 16 C 12 30, 16 40, 22 39 C 28 38, 30 27, 35 27 C 41 27, 43 48, 49 49 C 54 50, 56 30, 58 22 L 58 58 L 6 58 Z"
+        fill="url(#valley)"/>
+  <!-- population (sub-populations) descending the landscape -->
+  <circle cx="13" cy="24" r="2.1" fill="#7986cb"/>
+  <circle cx="19" cy="34" r="2.3" fill="#3f51b5"/>
+  <circle cx="23.5" cy="38" r="2.1" fill="#3f51b5"/>
+  <circle cx="34" cy="28" r="2.0" fill="#7986cb"/>
+  <circle cx="40" cy="38" r="2.3" fill="#3f51b5"/>
+  <circle cx="44" cy="44" r="2.1" fill="#3f51b5"/>
+  <circle cx="54" cy="29" r="2.0" fill="#7986cb"/>
+  <!-- elite / global best in the deepest basin -->
+  <circle cx="49" cy="49" r="7.2" fill="#ffb300" opacity="0.22"/>
+  <circle cx="49" cy="49" r="3.8" fill="#ffb300" stroke="#fff" stroke-width="1.1"/>
+</svg>

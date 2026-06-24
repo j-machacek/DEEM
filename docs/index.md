@@ -1,3 +1,8 @@
+<div class="deem-hero" markdown>
+![DEEM — Differential Evolution with Elitism and Multi-populations](logo/deem-logo.svg){ .deem-logo-light }
+![DEEM — Differential Evolution with Elitism and Multi-populations](logo/deem-logo-dark.svg){ .deem-logo-dark }
+</div>
+
 # DEEM
 
 **DEEM** — *Differential Evolution with Elitism and Multi-populations* — is a
@@ -45,7 +50,7 @@ small usage examples.
   the restart strategy.
 - :material-star-four-points: **[DEEMI](deemi.md)** —
   the improved variant: hybrid restart, success-history adaptation, optional
-  surrogate pre-screening and an evaluation cache.
+  surrogate pre-screening (RBF or Gaussian-process) and an evaluation cache.
 - :material-code-braces: **[API reference](reference/deem.md)** —
   the constructor arguments and attributes of the `DEEM` and `DEEMI` classes.
 
@@ -91,5 +96,4 @@ multi-modal and composite problems. See the [paper][paper] for the full study an
 
 ## License and authorship
 
-DEEM is developed by **Jan Machaček** (with Simon Siegel and Hauke Zachert),
-Institute of Geotechnics, Technical University of Darmstadt.
+DEEM is developed by Jan Machaček, Institute of Geotechnics, Technical University of Darmstadt.
