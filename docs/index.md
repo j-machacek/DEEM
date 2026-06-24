@@ -82,6 +82,19 @@ print(optimizer.FBEST)             # best objective value found
 print(optimizer.XBEST)             # best position found
 ```
 
+## Watch it converge
+
+DEEMI optimising the 2-D Rastrigin function with its default settings. The
+population of candidate solutions (white dots) explores the multi-modal landscape
+while the global best (gold star) descends to the global minimum at the origin.
+
+<div class="deem-hero" markdown>
+![DEEMI optimising the 2-D Rastrigin function](assets/deemi_rastrigin_2d.gif){ width=620 }
+</div>
+
+The script that produces this animation (and a 1080×1080 video version) is in
+`examples/deemi_animation_2d.py`.
+
 ## Validation
 
 DEEM was validated against benchmark functions from CEC 2015, 2017, 2020 and 2022
