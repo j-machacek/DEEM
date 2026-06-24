@@ -2,8 +2,8 @@
 title: Home
 ---
 <div class="deem-hero" markdown>
-![DEEM — Differential Evolution with Elitism and Multi-populations](logo/deem-logo-light.svg){ .deem-logo-light }
-![DEEM — Differential Evolution with Elitism and Multi-populations](logo/deem-logo-dark.svg){ .deem-logo-dark }
+![DEEM — Differential Evolution with Elitism and Multi-populations](logo/deem-logo-light.png){ .deem-logo-light }
+![DEEM — Differential Evolution with Elitism and Multi-populations](logo/deem-logo-dark.png){ .deem-logo-dark }
 </div>
 
 **DEEM** — *Differential Evolution with Elitism and Multi-populations* — is a
