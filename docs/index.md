@@ -1,9 +1,7 @@
 <div class="deem-hero" markdown>
-![DEEM — Differential Evolution with Elitism and Multi-populations](logo/deem-logo.svg){ .deem-logo-light }
+![DEEM — Differential Evolution with Elitism and Multi-populations](logo/deem-logo-light.svg){ .deem-logo-light }
 ![DEEM — Differential Evolution with Elitism and Multi-populations](logo/deem-logo-dark.svg){ .deem-logo-dark }
 </div>
-
-# DEEM
 
 **DEEM** — *Differential Evolution with Elitism and Multi-populations* — is a
 heuristic optimiser of the Differential Evolution (DE) family. It combines three

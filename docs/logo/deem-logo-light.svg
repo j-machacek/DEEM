@@ -7,7 +7,7 @@
    aria-label="DEEM logo"
    version="1.1"
    id="svg12"
-   sodipodi:docname="deem-logo-dark.svg"
+   sodipodi:docname="deem-logo-light.svg"
    inkscape:export-filename="deem-logo.png"
    inkscape:export-xdpi="600"
    inkscape:export-ydpi="600"
@@ -140,7 +140,8 @@
      font-weight="800"
      letter-spacing="1.5"
      fill="#ffffff"
-     id="text11">DEEM</text>
+     id="text11"
+     style="fill:#283593;fill-opacity:1">DEEM</text>
   <text
      x="71.062202"
      y="49.542366"
@@ -149,5 +150,6 @@
      font-weight="500"
      letter-spacing="0.6"
      fill="#b39ddb"
-     id="text12">Differential Evolution · Elitism · Multi-populations</text>
+     id="text12"
+     style="fill:#5c6bc0;fill-opacity:1">Differential Evolution · Elitism · Multi-populations</text>
 </svg>
