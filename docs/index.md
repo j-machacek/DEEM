@@ -1,5 +1,5 @@
 ---
-title: HDifferential Evolution with Elitism and Multi-populationse
+title: Differential Evolution with Elitism and Multi-populationse
 ---
 
 <div class="deem-hero" markdown>
