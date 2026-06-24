@@ -127,8 +127,11 @@ class DEEM:
             Relative tolerance of the evaluation cache. None disables the cache
             (reproduces the original number of evaluations).
         surrogate : object or None
-            Optional surrogate manager exposing fit(X, f) and
-            select(candidates, n_eval) -> indices_to_evaluate. None disables it.
+            Optional surrogate manager exposing
+            select(optimizer, candidates) -> list_of_indices_to_evaluate and
+            observe(evaluated_candidates). None disables surrogate pre-screening.
+            See DEEM.surrogate (RBFSurrogate/SurrogateManager and the
+            Gaussian-process GPSurrogate/GPSurrogateManager).
         seed : int or None
             Seed for numpy's global RNG (reproducibility).
         restart_budget : int or None
@@ -234,7 +237,7 @@ class DEEM:
 
         # Sort and track best
         self.candidates.sort(key=lambda cs: cs.fbest)
-        self.XBEST = self.candidates[0].xbest
+        self.XBEST = self.candidates[0].xbest.copy()
         self.FBEST = self.candidates[0].fbest
         self.XBEST_history.append(self.XBEST)
         self.FBEST_history.append(self.FBEST)
@@ -646,7 +649,7 @@ class DEEM:
             if self.candidates[0].fbest < self.FBEST:
                 self.XBEST_history.append(self.XBEST)
                 self.FBEST_history.append(self.FBEST)
-                self.XBEST = self.candidates[0].xbest
+                self.XBEST = self.candidates[0].xbest.copy()
                 self.FBEST = self.candidates[0].fbest
 
             self.update_archive()

@@ -310,9 +310,14 @@ def space_filling_sample(n: int, LB: np.ndarray, UB: np.ndarray) -> np.ndarray:
     if n <= 0:
         return np.empty((0, len(LB)))
     try:
+        import warnings
         from scipy.stats.qmc import Sobol
         eng = Sobol(d=len(LB), scramble=True)
-        u = eng.random(n)
+        with warnings.catch_warnings():
+            # n is generally not a power of two here; the resulting (mild) loss of
+            # balance is irrelevant for restart space-filling, so silence the notice.
+            warnings.simplefilter("ignore")
+            u = eng.random(n)
     except Exception:
         u = np.random.rand(n, len(LB))
     return LB + u * (UB - LB)
