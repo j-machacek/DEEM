@@ -83,6 +83,12 @@ base class.
 
 ## Surrogate managers
 
+!!! warning "Surrogate models are experimental"
+    The surrogate models are currently **experimental**. In our experience they do
+    not necessarily improve the optimisation process in all cases, and further
+    investigation is required. We recommend running the optimisation **without a
+    surrogate model first**.
+
 Two interchangeable surrogate controllers are bundled in `DEEM.surrogate`. Both
 expose the same `select(optimizer, candidates)` / `observe(evaluated)` interface
 and a kNN feasibility bias; they differ in the underlying model.

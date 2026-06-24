@@ -74,6 +74,11 @@ Numerical helpers used across the algorithm, including:
 
 ## `DEEM.surrogate`
 
+!!! warning "Surrogate models are experimental"
+    The surrogate models are currently **experimental** and do not necessarily
+    improve the optimisation process in all cases; further investigation is
+    required. We recommend running the optimisation **without a surrogate first**.
+
 Optional, used only by `DEEMI` when a surrogate is supplied:
 
 - **`RBFSurrogate`** — a regularised radial-basis-function surrogate (predict + novelty).

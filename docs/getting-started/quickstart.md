@@ -76,6 +76,12 @@ restart, success-history adaptation, an evaluation cache and an optional
 surrogate). With its defaults it behaves as the improved algorithm; set
 `method_reset="density"` and `adapt=False` to reproduce the original behaviour.
 
+!!! warning "Surrogate models are experimental"
+    The optional surrogate models are currently **experimental**. In our experience
+    they do not necessarily improve the optimisation process in all cases, and
+    further investigation is required. We recommend running the optimisation
+    **without a surrogate model first**.
+
 !!! note "Parameter name"
 
     In `DEEMI` the number of sub-populations is passed as `npop_max` / `npop_min`

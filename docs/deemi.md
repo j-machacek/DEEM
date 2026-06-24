@@ -36,6 +36,12 @@ The exploration/exploitation balance then responds to what is actually working.
 
 ### Optional surrogate pre-screening — `surrogate`
 
+!!! warning "Surrogate models are experimental"
+    The surrogate models are currently **experimental**. In our experience they do
+    not necessarily improve the optimisation process in all cases, and further
+    investigation is required. We recommend running the optimisation **without a
+    surrogate model first**.
+
 For expensive objectives, an optional surrogate model can rank the trial vectors
 each iteration so that **only the most promising fraction (plus an exploration
 quota) is evaluated on the real objective**. Two surrogate managers are bundled in

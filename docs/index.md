@@ -1,3 +1,6 @@
+---
+title: Home
+---
 <div class="deem-hero" markdown>
 ![DEEM — Differential Evolution with Elitism and Multi-populations](logo/deem-logo-light.svg){ .deem-logo-light }
 ![DEEM — Differential Evolution with Elitism and Multi-populations](logo/deem-logo-dark.svg){ .deem-logo-dark }
@@ -48,7 +51,8 @@ small usage examples.
   the restart strategy.
 - :material-star-four-points: **[DEEMI](deemi.md)** —
   the improved variant: hybrid restart, success-history adaptation, optional
-  surrogate pre-screening (RBF or Gaussian-process) and an evaluation cache.
+  surrogate pre-screening (RBF or Gaussian-process, *experimental*) and an
+  evaluation cache.
 - :material-code-braces: **[API reference](reference/deem.md)** —
   the constructor arguments and attributes of the `DEEM` and `DEEMI` classes.
 
@@ -84,16 +88,17 @@ print(optimizer.XBEST)             # best position found
 
 ## Watch it converge
 
-DEEMI optimising the 2-D Rastrigin function with its default settings. The
+DEEMI optimising the 2-D Eggholder function with its default settings. The
 population of candidate solutions (white dots) explores the multi-modal landscape
 while the global best (gold star) descends to the global minimum at the origin.
 
 <div class="deem-hero" markdown>
-![DEEMI optimising the 2-D Rastrigin function](assets/deemi_rastrigin_2d.gif){ width=620 }
+![DEEMI optimising the 2-D Rastrigin function](assets/deemi_eggholder_3d.gif){ width=620 }
 </div>
 
-The script that produces this animation (and a 1080×1080 video version) is in
-`examples/deemi_animation_2d.py`.
+The script that produces this animation — together with a **2-D surface view** and
+1080-square video versions — is in `examples/deemi_animation.py`; see
+[Visualising convergence](examples/animation.md).
 
 ## Validation
 

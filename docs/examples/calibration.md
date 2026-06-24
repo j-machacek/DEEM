@@ -97,4 +97,10 @@ evaluation budget more carefully:
 - **Evaluation cache** (`cache_tol=1e-6`) — never re-simulate a position that has
   already been evaluated (useful when penalty-triggering points recur).
 
+!!! warning "Surrogate models are experimental"
+    The surrogate models are currently **experimental**. In our experience they do
+    not necessarily improve the optimisation process in all cases, and further
+    investigation is required. We recommend running the optimisation **without a
+    surrogate model first**.
+
 See the [DEEMI overview](../deemi.md) for details.
