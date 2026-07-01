@@ -5,6 +5,7 @@
 # This file is part of DEEM, released under the BSD 3-Clause License.
 # See the LICENSE file in the project root for the full license text.
 
+#!/usr/bin/env python3
 """
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 #               DEEM - Differential Evolution with Elitism and Multi-populations
@@ -29,11 +30,14 @@
 #                              kept. B) plot_results() guards against a changing
 #                              number of subpopulations (ragged diversity series) and
 #                              against empty histories, so logging can never abort a run.
+# 01.07.2026, J. Machacek - force use of matplotlib.use('Agg', force=True) for thread safety and to avoid GUI backend issues in batch mode.
 #
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 """
 
 import numpy as np
+import matplotlib
+matplotlib.use('Agg', force=True)
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 from typing import List, Any, Sequence, Union
