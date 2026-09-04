@@ -102,8 +102,15 @@ additionally returns a structured result dictionary:
 
 ```python
 result = opt.update()
-# {'x', 'f', 'nit', 'nfev', 'n_restarts', 'cache_size', 'time'}
+# {'x', 'f', 'nit', 'nfev', 'n_restarts', 'cache_size', 'time',
+#  'initial_evaluation_time', 'evaluation_time', 'optimizer_overhead_time'}
 ```
+
+The iteration table separates time spent evaluating the objective (`Eval / s`)
+from optimiser work (`Other / s`). The final result reports the initial-population
+evaluation separately from the candidate evaluations inside `update()`. This makes
+it possible to distinguish an expensive objective from optimiser overhead without
+adding extra objective calls.
 
 ### Restart budget — `restart_budget`
 
@@ -112,11 +119,17 @@ result = opt.update()
 ## Parallel evaluation on Windows
 
 `DEEMI` evaluates candidate solutions through a process pool when `nworkers > 1`.
-On Windows, worker processes are *spawned* and do not inherit the parent's runtime
-state. The bundled `evaluation.py` therefore starts the pool with an
-**initializer** that re-establishes the required state (e.g. the `ACT.globals`
-used by numgeo-ACT) in every worker. On Linux the state is inherited through
-`fork`. See the [calibration example](examples/calibration.md).
+The worker processes are started once and reused for the initial population and
+all subsequent generations. This avoids repeatedly importing Python, NumPy, SciPy
+and the objective's modules, which is particularly costly with Windows' *spawn*
+start method. The pool is closed automatically when `update()` returns or raises
+an exception; `close()` is also available for explicitly releasing it before an
+optimisation is run.
+
+On Windows, worker processes do not inherit the parent's runtime state. The pool
+therefore uses an **initializer** that re-establishes the required state (e.g. the
+`ACT.globals` used by numgeo-ACT) in every worker. On Linux the state is inherited
+through `fork`. See the [calibration example](examples/calibration.md).
 
 ## Summary of new constructor arguments
 

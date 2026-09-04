@@ -77,9 +77,22 @@ result = optimizer.update()
 | `n_restarts` | Number of global restarts triggered. |
 | `cache_size` | Number of cached evaluations (0 if the cache is off). |
 | `time` | Wall-clock run time in seconds. |
+| `initial_evaluation_time` | Time spent evaluating the initial population in the constructor. |
+| `evaluation_time` | Time spent evaluating candidates inside `update()`. |
+| `optimizer_overhead_time` | Time inside `update()` excluding candidate evaluation. |
 
 The result attributes `XBEST`, `FBEST` and `fev` are also available, as in the
 base class.
+
+When `nworkers > 1`, DEEMI creates one process pool and reuses it for the initial
+population and every generation. `update()` closes this pool automatically,
+including when an exception is raised.
+
+### `close()`
+
+Releases the reusable worker pool. Calling `close()` more than once is safe. This
+is normally unnecessary because `update()` closes the pool automatically, but it
+is useful if an optimiser is constructed and then not run.
 
 ## Surrogate managers
 
@@ -137,4 +150,3 @@ Lower-Confidence-Bound rule, so it evaluates candidates that are either promisin
 
 Pass either manager to `DEEM(..., surrogate=...)`. Both depend only on numpy and
 scipy.
-
