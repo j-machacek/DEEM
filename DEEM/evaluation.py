@@ -31,6 +31,7 @@
 #                              before any worker is dispatched): identical (within a
 #                              tolerance) positions are answered from the cache and
 #                              never re-evaluated. None by default (off).
+# 04.09.2026, J. Machacek - Added reusable process executors across generations
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 """
 
@@ -61,7 +62,8 @@ def get_worker_data():
             'weights': _globals.weights,
             'parent_path': _globals.parent_path,
             'penalty': _globals.penalty,
-            'timeout': _globals.timeout
+            'timeout': _globals.timeout,
+            'experimental_database': getattr(_globals, 'experimental_database', '-')
             }
     except Exception:
         return None
@@ -90,6 +92,7 @@ def initialize_worker(worker_data):
     _globals.parent_path = worker_data['parent_path']
     _globals.penalty = worker_data['penalty']
     _globals.timeout = worker_data['timeout']
+    _globals.experimental_database = worker_data['experimental_database']
     _globals.initialized = True
 
 
@@ -135,7 +138,22 @@ class EvalCache:
         return len(self._store)
 
 
-def evaluate_cost_function(particles, nworkers: int = 1, mode: str = 'process', cache: 'EvalCache' = None):
+def create_evaluation_executor(nworkers: int, mode: str = 'process'):
+    """Create one reusable executor for all generations of an optimisation."""
+    if nworkers <= 1:
+        return None
+    if mode == 'thread':
+        return futures.ThreadPoolExecutor(max_workers=nworkers)
+    worker_data = get_worker_data()
+    return futures.ProcessPoolExecutor(
+        max_workers=nworkers,
+        initializer=initialize_worker,
+        initargs=(worker_data,)
+    )
+
+
+def evaluate_cost_function(particles, nworkers: int = 1, mode: str = 'process',
+                           cache: 'EvalCache' = None, executor=None):
     """
     Evaluate the cost function for a list of candidate solutions.
 
@@ -146,11 +164,10 @@ def evaluate_cost_function(particles, nworkers: int = 1, mode: str = 'process', 
 
     Notes
     -----
-    The process pool is started with the initialize_worker initializer so that
-    spawned workers (Windows) re-establish ACT.globals before evaluating; on Linux
-    the state is inherited through fork. The list returned in parallel mode is the
-    list of worker-evaluated candidates (mirrors the original behaviour); the driver
-    re-sorts by fitness afterwards, so ordering is irrelevant.
+    A caller-supplied executor can be reused across generations. When no executor
+    is supplied, a temporary pool is created for backward compatibility. Process
+    pools use initialize_worker so spawned workers (Windows) re-establish
+    ACT.globals before evaluating; on Linux the state is inherited through fork.
     """
     # ---- 1) cache lookup in the main process ----------------------------------
     to_eval = particles
@@ -180,6 +197,9 @@ def evaluate_cost_function(particles, nworkers: int = 1, mode: str = 'process', 
     if nworkers == 1 or n_real == 0:
         for p in to_eval:
             p.update_cost()
+    elif executor is not None:
+        done = list(executor.map(update_particle, to_eval))
+        _copy_back(done, to_eval)
     elif mode == "thread":
         with futures.ThreadPoolExecutor(nworkers) as executor:
             done = list(executor.map(update_particle, to_eval))
@@ -188,8 +208,8 @@ def evaluate_cost_function(particles, nworkers: int = 1, mode: str = 'process', 
         worker_data = get_worker_data()
         with futures.ProcessPoolExecutor(max_workers=nworkers,
                                          initializer=initialize_worker,
-                                         initargs=(worker_data,)) as executor:
-            done = list(executor.map(update_particle, to_eval))
+                                         initargs=(worker_data,)) as temporary_executor:
+            done = list(temporary_executor.map(update_particle, to_eval))
         _copy_back(done, to_eval)
 
     # ---- 3) populate the cache ------------------------------------------------

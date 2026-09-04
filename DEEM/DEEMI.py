@@ -49,6 +49,7 @@
 #   (7) Reproducibility (seed=...) and a structured self.result report.
 #   (8) Minor clean-ups: dead variables removed, object-list random choice replaced
 #       by an index draw, plotting made robust to a changing number of subpopulations.
+# 04.09.2026, J. Machacek - Reuse worker processes and report evaluation/overhead time
 #
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 """
@@ -65,7 +66,7 @@ from .logger import Logger
 from .toolbox import (Density, Levy, hashable_array, weighted_lehmer_mean,
                       success_history_lehmer, space_filling_sample, covariance_seed)
 from .sampling import sampling
-from .evaluation import evaluate_cost_function, EvalCache
+from .evaluation import evaluate_cost_function, create_evaluation_executor, EvalCache
 
 
 class Position:
@@ -214,6 +215,13 @@ class DEEM:
         # Optional evaluation cache
         self.cache = EvalCache(self.LB, self.UB, rel_tol=cache_tol) if cache_tol is not None else None
 
+        # Keep one worker pool alive for the complete optimisation. Recreating a
+        # spawned process pool for every generation is particularly expensive on
+        # Windows because every worker has to import NumPy, SciPy and user modules.
+        self._executor = create_evaluation_executor(self.nworkers)
+        self.evaluation_time = 0.0
+        self.initial_evaluation_time = 0.0
+
         # Initialize logger
         self.log = Logger(path='./', lower_bound=self.LB, upper_bound=self.UB)
 
@@ -238,7 +246,16 @@ class DEEM:
             self.candidates[0].x = np.asarray(X0, dtype=float)
 
         print("... evaluate fitness of initial positions")
-        self.candidates, n_real = evaluate_cost_function(self.candidates, nworkers=self.nworkers, cache=self.cache)
+        evaluation_start = time.perf_counter()
+        try:
+            self.candidates, n_real = evaluate_cost_function(
+                self.candidates, nworkers=self.nworkers, cache=self.cache,
+                executor=self._executor)
+        except Exception:
+            self.close()
+            raise
+        self.initial_evaluation_time = time.perf_counter() - evaluation_start
+        self.evaluation_time += self.initial_evaluation_time
         self.fev += n_real
 
         # Sort and track best
@@ -603,17 +620,37 @@ class DEEM:
     # ------------------------------------------------------------------ #
     #  Main loop                                                         #
     # ------------------------------------------------------------------ #
+    def close(self) -> None:
+        """Release worker processes; safe to call more than once."""
+        executor = getattr(self, '_executor', None)
+        if executor is not None:
+            executor.shutdown(wait=True, cancel_futures=True)
+            self._executor = None
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
     def update(self) -> dict:
+        try:
+            return self._update_impl()
+        finally:
+            self.close()
+
+    def _update_impl(self) -> dict:
         """
         Main DEEM optimization loop. Returns a structured result dictionary.
         """
         print("--------------------------------------------------------------------------")
-        print("{0: >5}  {1: >12}  {2: >14}  {3: >13}  {4: >5}  {5: >5}  {6: >10}  {7: >5}  {8: >5}"
+        print("{0: >5}  {1: >12}  {2: >14}  {3: >13}  {4: >10}  {5: >10}  {6: >5}  {7: >10}  {8: >5}  {9: >5}"
               .format("Iters.", "Best f(x_t)", "f(x_t)-f(x_t0)", "Early stoppage",
-                      "Time / s", "FEV", "Candidates/Pop", "COV", "DIV-GB"))
+                      "Eval / s", "Other / s", "FEV", "Candidates/Pop", "COV", "DIV-GB"))
         print("--------------------------------------------------------------------------")
         self.niter_below_tolerance = 0
         start_time = time.time()
+        update_evaluation_start = self.evaluation_time
 
         while self.iters <= self.maxiter:
             iter_start_time = time.time()
@@ -642,11 +679,20 @@ class DEEM:
             if self.surrogate is not None:
                 eval_idx = self.surrogate.select(self, self.candidates)
                 to_eval = [self.candidates[i] for i in eval_idx]
-                _, n_real = evaluate_cost_function(to_eval, nworkers=self.nworkers, cache=self.cache)
+                evaluation_start = time.perf_counter()
+                _, n_real = evaluate_cost_function(
+                    to_eval, nworkers=self.nworkers, cache=self.cache,
+                    executor=self._executor)
+                iteration_evaluation_time = time.perf_counter() - evaluation_start
                 self.surrogate.observe(to_eval)
             else:
+                evaluation_start = time.perf_counter()
                 self.candidates, n_real = evaluate_cost_function(
-                    self.candidates, nworkers=self.nworkers, cache=self.cache)
+                    self.candidates, nworkers=self.nworkers, cache=self.cache,
+                    executor=self._executor)
+                iteration_evaluation_time = time.perf_counter() - evaluation_start
+
+            self.evaluation_time += iteration_evaluation_time
 
             self.fev += n_real
             self.candidates.sort(key=lambda cs: cs.fbest)
@@ -697,10 +743,11 @@ class DEEM:
 
             if self.iters % self.log_interval == 0:
                 extra_reset_flag = "<- RESET" if self.global_reset_condition else ""
-                print("{0: >5}  {1: >12.5E}  {2: >14.5E}  {3: >6} / {4: <6}  {5: >9.3E}  {6: >5}  {7: >5} / {8: <5}  {9: <5}  {10: >9.3E} {11: >5}"
+                iteration_other_time = max(0.0, iter_end_time - iter_start_time - iteration_evaluation_time)
+                print("{0: >5}  {1: >12.5E}  {2: >14.5E}  {3: >6} / {4: <6}  {5: >10.3E}  {6: >10.3E}  {7: >5}  {8: >5} / {9: <5}  {10: <5}  {11: >9.3E} {12: >5}"
                       .format(self.iters, self.FBEST, df,
                               self.niter_below_tolerance, self.maxiter_below_tolerance,
-                              (iter_end_time - iter_start_time),
+                              iteration_evaluation_time, iteration_other_time,
                               self.fev, self.nparticles, self.nswarms,
                               self.nparticles_reset, np.round(self.DIV_NORM_GB, 4), extra_reset_flag))
 
@@ -712,6 +759,8 @@ class DEEM:
             self.iters += 1
 
         end_time = time.time()
+        update_evaluation_time = self.evaluation_time - update_evaluation_start
+        update_overhead_time = max(0.0, end_time - start_time - update_evaluation_time)
         try:
             self.log.plot_results()
         except Exception as exc:   # plotting must never abort an optimisation run
@@ -726,6 +775,9 @@ class DEEM:
             'n_restarts': self.n_restarts,
             'cache_size': (len(self.cache) if self.cache is not None else 0),
             'time': end_time - start_time,
+            'initial_evaluation_time': self.initial_evaluation_time,
+            'evaluation_time': update_evaluation_time,
+            'optimizer_overhead_time': update_overhead_time,
         }
 
         print("---------------------------------------------------------------")
@@ -733,6 +785,9 @@ class DEEM:
         print(f"Best objective     : {self.FBEST:.6E}")
         print(f"Real evaluations   : {self.fev}")
         print(f"Restarts           : {self.n_restarts}")
+        print(f"Initial evaluation : {self.initial_evaluation_time:.3f} s")
+        print(f"Candidate evaluation: {update_evaluation_time:.3f} s")
+        print(f"Optimizer overhead : {update_overhead_time:.3f} s")
         print(f"Execution time     : {end_time - start_time:.3f} s")
         print("=======================================================================")
         print("")
