@@ -37,6 +37,7 @@ nav = [
         "theory/parameters.md",
     ] },
     { "DEEMI (improved)" = "deemi.md" },
+    { "Validation" = "validation.md" },
     { "Examples" = [
         "examples/configurations.md",
         "examples/animation.md",

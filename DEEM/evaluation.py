@@ -8,7 +8,7 @@
 """
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 #               DEEM - Differential Evolution with Elitism and Multi-populations
-#                               Copyright (C) 2023-2025 Jan Machacek
+#                               Copyright (C) 2023-2026 Jan Machacek
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 #
 # author: Jan Machacek, jan-machacek@outlook.com
@@ -32,6 +32,10 @@
 #                              tolerance) positions are answered from the cache and
 #                              never re-evaluated. None by default (off).
 # 04.09.2026, J. Machacek - Added reusable process executors across generations
+# 16.11.2026, J. Machacek - The worker initialisation is a general hook
+#                           (register_worker_state) instead of a hard-wired copy of
+#                           the numgeo-ACT globals; numgeo-ACT registers its state
+#                           in its vendored copy of this package.
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 """
 
@@ -39,61 +43,57 @@ import numpy as np
 from concurrent import futures
 
 
+# Optional (capture, restore) pair registered by a host application whose
+# objective depends on module-level state (see register_worker_state).
+_worker_state = None
+
+
+def register_worker_state(capture, restore):
+    """
+    Register functions that carry module-level state into worker processes.
+
+    On Linux a process pool inherits the state of the main process through fork.
+    On Windows (and macOS) workers are spawned and start from a fresh import, so
+    an objective that reads module-level settings would see the defaults. When a
+    process pool is created, capture() is called in the main process; its
+    (picklable) result is passed to restore(data) once in every new worker.
+    restore must be a module-level function, because it is pickled by reference.
+    register_worker_state(None, None) removes the hook.
+    """
+    # 16.11.2026, J. Machacek - Initial version
+    global _worker_state
+    if capture is None and restore is None:
+        _worker_state = None
+        return
+    if not (callable(capture) and callable(restore)):
+        raise TypeError("capture and restore must be callables (or both None).")
+    _worker_state = (capture, restore)
+
+
 def get_worker_data():
+    """Return (restore, data) for the pool initializer, or None without a hook."""
     # 23.06.2026, J. Machacek - Initial version
-    #
-    # On Linux the process pool inherits ACT.globals through fork. On Windows
-    # new worker processes are spawned and therefore need explicit initialization.
+    # 16.11.2026, J. Machacek - Uses the registered hook (register_worker_state)
+    if _worker_state is None:
+        return None
+    capture, restore = _worker_state
     try:
-        import ACT.globals as _globals
-        return {
-            'model': _globals.model,
-            'free_parameter': _globals.free_parameter,
-            'exp_oedometer': _globals.exp_oedometer,
-            'exp_triaxCD': _globals.exp_triaxCD,
-            'exp_triax_CU': _globals.exp_triaxCU,
-            'exp_triax_CUcyc': _globals.exp_triax_CUcyc,
-            'exp_triax_CDcyc_HCA': _globals.exp_triax_CDcyc_HCA,
-            'exp_triax_CUcyc_HCA': _globals.exp_triax_CUcyc_HCA,
-            'exp_USScyc': _globals.exp_USScyc,
-            'exp_isotropic_compression': _globals.exp_isotropic_compression,
-            'similarity': _globals.similarity,
-            'verbose': _globals.verbose,
-            'weights': _globals.weights,
-            'parent_path': _globals.parent_path,
-            'penalty': _globals.penalty,
-            'timeout': _globals.timeout,
-            'experimental_database': getattr(_globals, 'experimental_database', '-')
-            }
+        data = capture()
     except Exception:
         return None
+    if data is None:
+        return None
+    return (restore, data)
 
 
 def initialize_worker(worker_data):
+    """Pool initializer: restore the captured host state in a new worker."""
     # 23.06.2026, J. Machacek - Initial version
-
+    # 16.11.2026, J. Machacek - Calls the restore function of the registered hook
     if worker_data is None:
         return
-
-    import ACT.globals as _globals
-    _globals.model = worker_data['model']
-    _globals.free_parameter = worker_data['free_parameter']
-    _globals.exp_oedometer = worker_data['exp_oedometer']
-    _globals.exp_triaxCD = worker_data['exp_triaxCD']
-    _globals.exp_triaxCU = worker_data['exp_triax_CU']
-    _globals.exp_triax_CUcyc = worker_data['exp_triax_CUcyc']
-    _globals.exp_triax_CDcyc_HCA = worker_data['exp_triax_CDcyc_HCA']
-    _globals.exp_triax_CUcyc_HCA = worker_data['exp_triax_CUcyc_HCA']
-    _globals.exp_USScyc = worker_data['exp_USScyc']
-    _globals.exp_isotropic_compression = worker_data['exp_isotropic_compression']
-    _globals.similarity = worker_data['similarity']
-    _globals.verbose = worker_data['verbose']
-    _globals.weights = worker_data['weights']
-    _globals.parent_path = worker_data['parent_path']
-    _globals.penalty = worker_data['penalty']
-    _globals.timeout = worker_data['timeout']
-    _globals.experimental_database = worker_data['experimental_database']
-    _globals.initialized = True
+    restore, data = worker_data
+    restore(data)
 
 
 def update_particles_group(particle_group, updated_particles):
@@ -166,8 +166,9 @@ def evaluate_cost_function(particles, nworkers: int = 1, mode: str = 'process',
     -----
     A caller-supplied executor can be reused across generations. When no executor
     is supplied, a temporary pool is created for backward compatibility. Process
-    pools use initialize_worker so spawned workers (Windows) re-establish
-    ACT.globals before evaluating; on Linux the state is inherited through fork.
+    pools use initialize_worker so spawned workers (Windows) re-establish the
+    state registered with register_worker_state before evaluating; on Linux the
+    state is inherited through fork.
     """
     # ---- 1) cache lookup in the main process ----------------------------------
     to_eval = particles

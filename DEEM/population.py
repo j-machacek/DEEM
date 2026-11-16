@@ -8,7 +8,7 @@
 """
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 #               DEEM - Differential Evolution with Elitism and Multi-populations
-#                            Copyright (C) 2023-2025 Jan Machacek
+#                            Copyright (C) 2023-2026 Jan Machacek
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 #
 # author: Jan Machacek, jan-machacek@outlook.com
@@ -46,6 +46,13 @@
 #                           C) Replaced the O(n^2) array re-construction inside
 #                              '_create_equally_distributed_subpops' by a single
 #                              pre-built position matrix with an availability mask.
+# 16.11.2026, J. Machacek - A) CandidateSolution and enforce_BC take an optional rng
+#                              (numpy.random.RandomState interface; None = numpy's
+#                              global RNG).
+#                           B) Sub-populations are formed with distances between
+#                              positions rescaled by the bounds (scaled_positions), so
+#                              parameters with a large range no longer dominate the
+#                              clustering (scale invariance).
 #
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 """
@@ -65,7 +72,8 @@ class CandidateSolution:
     """
     Represents a candidate solution in the search space.
     """
-    def __init__(self, x0: np.ndarray, function, f0: Optional[float] = None, subpop_index: int = 0):
+    def __init__(self, x0: np.ndarray, function, f0: Optional[float] = None, subpop_index: int = 0,
+                 rng=None):
         self.function = function
         self.x = self.xbest = self.xbest0 = np.array(x0)
         if f0 is not None:
@@ -82,8 +90,10 @@ class CandidateSolution:
         self.iiter_reset = 0
         self.subpop_index = subpop_index
 
-        self.DE_CR = np.random.uniform()
-        self.phi = np.random.uniform()
+        # rng is used here only and not stored (candidates are copied and pickled)
+        rng = np.random.mtrand._rand if rng is None else rng
+        self.DE_CR = rng.uniform()
+        self.phi = rng.uniform()
 
     # 23.06.2026, J. Machacek - keep the (possibly heavy / stateful) objective
     #                           by reference when the candidate is deep-copied.
@@ -145,11 +155,12 @@ class CandidateSolution:
             self.improved = True
         self.niter_xbest += 1
 
-    def enforce_BC(self, lb: np.ndarray, ub: np.ndarray, ref: np.ndarray, method: str = 'random') -> None:
+    def enforce_BC(self, lb: np.ndarray, ub: np.ndarray, ref: np.ndarray, method: str = 'random',
+                   rng=None) -> None:
         """
         Enforce boundary conditions on the candidate solution.
         """
-        self.x = np.array(enforce_BC(self.x, lb, ub, ref, method))
+        self.x = np.array(enforce_BC(self.x, lb, ub, ref, method, rng=rng))
 
 
 ########################################################################
@@ -246,7 +257,7 @@ class Population:
         Create new subpopulations using the specified method.
         """
         if self.method_subpop_creation == 'equally-distributed':
-            return self._create_equally_distributed_subpops(sorted_candidates)
+            return self._create_equally_distributed_subpops(sorted_candidates, LB, UB)
         elif self.method_subpop_creation == 'fitness-focused':
             return self._create_fitness_focused_subpops(sorted_candidates, LB, UB)
         else:
@@ -274,7 +285,27 @@ class Population:
             for cs in subpop:
                 cs.subpop_index = i
 
-    def _create_equally_distributed_subpops(self, sorted_candidates: List[CandidateSolution]) -> List[List[CandidateSolution]]:
+    @staticmethod
+    def scaled_positions(X, LB: np.ndarray, UB: np.ndarray) -> np.ndarray:
+        """
+        Positions rescaled so that every dimension has the span of the widest one.
+
+        16.11.2026, J. Machacek - used for all distances and diversity measures,
+        so they do not depend on the units or ranges of the parameters. Distances
+        and diversity ratios are unaffected by the common factor; for a box with
+        equal spans the factor of every dimension is exactly 1, so results are
+        bit-identical to the former raw-coordinate computation.
+        """
+        span = np.asarray(UB, dtype=float) - np.asarray(LB, dtype=float)
+        widest = np.max(span) if span.size else 0.0
+        if not widest > 0.0:
+            return np.asarray(X, dtype=float)
+        factor = np.where(span > 0.0, widest / np.where(span > 0.0, span, 1.0), 1.0)
+        return np.asarray(X, dtype=float) * factor
+
+    def _create_equally_distributed_subpops(self, sorted_candidates: List[CandidateSolution],
+                                            LB: Optional[np.ndarray] = None,
+                                            UB: Optional[np.ndarray] = None) -> List[List[CandidateSolution]]:
         """
         Create subpopulations by distributing the top candidates as leaders,
         then assigning the remaining candidates round-robin to the nearest leader.
@@ -292,6 +323,9 @@ class Population:
 
         rest_pos = np.array([cs.xbest for cs in rest], dtype=float)     # (m, ndim)
         leader_pos = np.array([ld.xbest for ld in leaders], dtype=float)  # (k, ndim)
+        if LB is not None and UB is not None:
+            rest_pos = self.scaled_positions(rest_pos, LB, UB)
+            leader_pos = self.scaled_positions(leader_pos, LB, UB)
         available = np.ones(len(rest), dtype=bool)
 
         # round-robin nearest assignment using a single distance matrix
@@ -331,8 +365,8 @@ class Population:
             if remainder > 0:
                 remainder -= 1
             if sorted_candidates:
-                candidates_array = np.array([cs.xbest for cs in sorted_candidates])
-                best_arr = best_candidate.xbest.reshape(1, -1)
+                candidates_array = self.scaled_positions([cs.xbest for cs in sorted_candidates], LB, UB)
+                best_arr = self.scaled_positions(best_candidate.xbest, LB, UB).reshape(1, -1)
                 distances = np.linalg.norm(candidates_array - best_arr, axis=1)
                 n_to_assign = n_per_subpop + extra - 1
                 if len(distances) > 0:

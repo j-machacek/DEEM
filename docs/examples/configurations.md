@@ -35,12 +35,13 @@ f(0,...,0) = 0) in four configurations, for problem dimensions nD = 2 and nD = 1
     4. GP surrogate     - DEEMI with the Gaussian-process surrogate (LCB selection)
 
 A fixed RNG seed is passed to every run, so all configurations start from the
-*same* initial population (DEEM seeds NumPy's global RNG at construction, and the
-initial sampling draws from it). The optimisation trajectories then differ because
+*same* initial population (the seed initialises the optimiser's own random number
+generator, from which the initial sampling draws). The optimisation trajectories then differ because
 the cache / surrogate change which candidates are evaluated.
 
 History:
 24.06.2026, J. Machacek - Initial version
+16.11.2026, J. Machacek - Seeding description updated (own random number generator)
 
 """
 

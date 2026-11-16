@@ -38,6 +38,8 @@ DEEM(
     surrogate=None,
     seed=None,
     restart_budget=None,
+    F0=None,
+    restart_tail=0.1,
 )
 ```
 
@@ -55,8 +57,76 @@ All arguments documented in the [`DEEM` reference](deem.md) apply, except that
 | `adapt` | `True` | SHADE-style improvement-weighted adaptation of $CR$ and $\phi$. |
 | `cache_tol` | `None` | Relative tolerance of the evaluation cache; `None` disables it. |
 | `surrogate` | `None` | Surrogate manager for pre-screening (e.g. `SurrogateManager`); `None` disables it. |
-| `seed` | `None` | Seed for NumPy's global RNG (reproducibility). |
+| `seed` | `None` | Seed of the optimiser's **own** random number generator: an `int`, a `numpy.random.RandomState` or a `numpy.random.Generator`. `None` draws from NumPy's global RNG (legacy behaviour). See [Random numbers and reproducibility](#random-numbers-and-reproducibility). |
 | `restart_budget` | `None` | Maximum number of global restarts (`None` = unlimited). |
+| `F0` | `None` | Known objective value of `X0` (e.g. from a pre-flight evaluation); `X0` is then not evaluated again, but still counts as one evaluation. Ignored without `X0`. |
+| `restart_tail` | `0.1` | No global restart once less than this fraction of the budget (iterations and evaluations) remains. `0` allows restarts until the end (behaviour before 16.11.2026). |
+
+## Behaviour of the core
+
+These rules hold for `DEEMI` (and, where noted, for the published `DEEM` class).
+
+**Budget.** `maxiter` is the number of generations *after* the initial population
+(both classes). A run therefore performs at most `nparticles_max · (maxiter + 1)`
+evaluations; `maxfev` stops the run after the generation in which it is reached.
+`fev` / `result['nfev']` count the *real* objective calls, including the initial
+population; `result['nit']` is the number of generations performed. Before
+16.11.2026 the loop ran `maxiter + 1` generations.
+
+**Failed evaluations.** A NaN or infinite objective value is replaced by
+`penalty` (both classes). An evaluation counts as *failed* if its value is
+`>= penalty`; failed points never enter the elite archive or the mutation pool.
+If every evaluation of a generation fails, the generation still completes (the
+penalty points are used as references), so a long run survives a region in which
+the objective cannot be evaluated.
+
+**Bounds.** `lower_bound`, `upper_bound` and `X0` are validated (both classes):
+finite, of equal length, `lower_bound <= upper_bound`, `X0` inside the box.
+`lower_bound == upper_bound` is allowed and keeps that parameter fixed.
+
+**Scale invariance.** Diversity measures and the distances used to form
+sub-populations are computed on positions rescaled by the bounds, so a parameter
+with a range of `1e6` and one with a range of `1e-3` are treated alike. Rescaling a
+parameter (e.g. changing its units together with its bounds) does not change the
+search. For a box whose dimensions all have the same span the results are
+bit-identical to the former raw-coordinate computation. The density restart
+(`method_reset='density'`) chooses its exploit fraction from the *normalised*
+diversity.
+
+## Random numbers and reproducibility
+
+`seed=<int>` creates a `numpy.random.RandomState` that every random draw of the
+run uses: initial sampling (including the scrambling of the Sobol/Halton engines),
+the Cauchy draws of the control parameters, boundary handling, Lévy steps and
+restarts. Consequences:
+
+- the stream of a seeded run is **identical** to that of earlier versions, which
+  called `np.random.seed(seed)`; the generator change alone does not alter
+  fixed-seed results (see [changes of fixed-seed results](#changes-of-fixed-seed-results));
+- the run is reproducible even if the objective (or any other library) draws from
+  `np.random`, and it no longer changes the global RNG state;
+- results do not depend on the number of worker processes (`nworkers`).
+
+`seed=None` keeps the legacy behaviour and draws from NumPy's global RNG, so a
+preceding `np.random.seed(...)` still makes the run reproducible.
+
+## Changes of fixed-seed results
+
+Compared with the version before 16.11.2026, a run with the same seed and settings
+gives
+
+- the **same** result if its box has equal spans in all dimensions, no global
+  restart would have fallen into the last 10 % of the budget, and the objective
+  never returns NaN/inf (with `restart_tail=0` the second condition disappears);
+- a **different** result if the parameter ranges differ (scale invariance), if a
+  restart would have happened in the last 10 % of the budget (`restart_tail=0.1`),
+  if the objective returns NaN/inf, or with `maxiter` as the binding limit, because
+  the loop now performs `maxiter` instead of `maxiter + 1` generations;
+- `method_reset='density'` now chooses its exploit fraction from the normalised
+  diversity.
+
+The [validation](../validation.md) page shows that these changes are neutral or
+better on the benchmark.
 
 ## Methods
 
@@ -72,7 +142,7 @@ result = optimizer.update()
 | --- | ----------- |
 | `x` | Best position found, $\mathbf{x}_{GB}$. |
 | `f` | Best objective value found. |
-| `nit` | Number of iterations executed. |
+| `nit` | Number of generations performed after the initial population. |
 | `nfev` | Number of *real* objective evaluations performed. |
 | `n_restarts` | Number of global restarts triggered. |
 | `cache_size` | Number of cached evaluations (0 if the cache is off). |

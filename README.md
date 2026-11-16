@@ -11,6 +11,28 @@ multi-modal objectives:
 
 **DEEM** is the algorithm that drives the automatic calibration tool [numge-ACT](https://www.numgeo.de/automatic-calibration/) for efficient calibration of advanced soil constitutive models.
 
+## DEEMI, the improved variant
+
+`from DEEM.DEEMI import DEEM` provides the improved implementation (hybrid restart,
+success-history adaptation, optional evaluation cache and surrogate pre-screening)
+with a robust core: NaN/inf objective values become the penalty, a seeded run uses
+its own random number generator (reproducible also with a stochastic objective and
+any number of worker processes), bounds are validated, and the search does not
+depend on the units of the parameters.
+
+## Validation
+
+`example/deemi_validation.py` benchmarks DEEMI against the published DEEM and
+SciPy's `differential_evolution` at equal evaluation budgets (shifted/rotated test
+functions, d = 5, 10, 20, 25 seeds, development and hold-out sets, a NaN region and
+badly scaled parameters). Method, results and the reproducing commands are on the
+[validation page](https://j-machacek.github.io/DEEM/validation/).
+
+```
+python example/deemi_validation.py run --suite all --regime all --out validation/results.csv
+python example/deemi_validation.py report validation/results.csv --reference deemi --out validation
+```
+
 ## Documentation
 
 [Access documentation here](https://j-machacek.github.io/DEEM/)

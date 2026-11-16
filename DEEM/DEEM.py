@@ -8,7 +8,7 @@
 """
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 #               DEEM - Differential Evolution with Elitism and Multi-populations
-#                            Copyright (C) 2023-2025 Jan Machacek  
+#                            Copyright (C) 2023-2026 Jan Machacek  
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 #
 # author: Jan Machacek, jan-machacek@outlook.com
@@ -24,6 +24,20 @@
 # History:
 # 05.02.2023, J. Machacek - Initial version
 # 07.02.2025, J. Machacek - Refactored code
+# 16.11.2026, J. Machacek - Defect fixes (the algorithm is unchanged):
+#                         - evaluate_cost_function returns (candidates, n_real) since
+#                           23.06.2026; the tuple was assigned to the candidate list, so
+#                           every run failed
+#                         - fev counts the real objective calls including the initial
+#                           population, so maxfev is honoured exactly
+#                         - non-finite objective values are mapped to the penalty
+#                         - maxiter is the number of generations after the initial
+#                           population
+#                         - niter_reset_global defaults to at least 1 (maxiter // 10 was 0
+#                           for maxiter < 10: a restart in every stagnant generation)
+#                         - a generation in which every evaluation failed keeps the penalty
+#                           candidates as mutation and restart references
+#                         - bounds and X0 are validated; the global best is stored as a copy
 #
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 """
@@ -40,6 +54,7 @@ from .logger import Logger
 from .toolbox import Density, Levy, hashable_array, weighted_lehmer_mean
 from .sampling import sampling
 from .evaluation import evaluate_cost_function
+from .DEEMI import FiniteObjective, validate_bounds
 
 class Position:
     """
@@ -108,6 +123,7 @@ class DEEM:
         """
         Initialize the DEEM optimizer and create the initial candidate solutions.
         """
+        lower_bound, upper_bound, X0 = validate_bounds(lower_bound, upper_bound, X0)
         # Handle min/max particles
         self.nparticles_min = min(nparticles_min, nparticles_max)
         self.nparticles_max = nparticles_max
@@ -118,18 +134,18 @@ class DEEM:
         # Penalty for infeasible or penalized solutions
         self.PENALTY = penalty
 
-        # Store settings
-        self.function = function
+        # Store settings; non-finite objective values become the penalty
+        self.function = FiniteObjective(function, self.PENALTY)
         self.maxiter = maxiter
         self.maxfev = maxfev
-        self.fev = 0  # function evaluations
+        self.fev = 0  # function evaluations (real objective calls)
         self.iters = 0
         self.sampling_method = sampling_method
 
         # Tolerance tracking
         self.niter_below_tolerance = 0
         self.niter_above_tolerance = 0
-        self.niter_reset_global = niter_reset_global if niter_reset_global is not None else self.maxiter // 10
+        self.niter_reset_global = niter_reset_global if niter_reset_global is not None else max(1, self.maxiter // 10)
         self.global_reset_iter = 0
         self.tolerance = tolerance
         self.maxiter_below_tolerance = maxiter_below_tolerance
@@ -143,8 +159,8 @@ class DEEM:
 
         # Bounds
         self.method_boundary = method_boundary
-        self.LB = np.array(lower_bound)
-        self.UB = np.array(upper_bound)
+        self.LB = np.array(lower_bound, dtype=float)
+        self.UB = np.array(upper_bound, dtype=float)
         self.dist_ub_lb = self.UB - self.LB
 
         self.method_subswarm_reduction = method_subswarm_reduction
@@ -189,14 +205,15 @@ class DEEM:
 
         # Optional initial guess
         if X0 is not None:
-            self.candidates[0].x = np.asarray(X0)
+            self.candidates[0].x = np.asarray(X0, dtype=float)
 
         print("... evaluate fitness of initial positions")
-        self.candidates = evaluate_cost_function(self.candidates, nworkers=self.nworkers)
+        self.candidates, n_real = evaluate_cost_function(self.candidates, nworkers=self.nworkers)
+        self.fev += n_real
 
         # Sort and track best
         self.candidates.sort(key=lambda cs: cs.fbest)
-        self.XBEST = self.candidates[0].xbest
+        self.XBEST = self.candidates[0].xbest.copy()
         self.FBEST = self.candidates[0].fbest
         self.XBEST_history.append(self.XBEST)
         self.FBEST_history.append(self.FBEST)
@@ -274,6 +291,13 @@ class DEEM:
         unity_positions = (self.archive_elite +
                            [Position(cs.xbest, cs.fbest) for cs in self.candidates[:self.nparticles]
                             if cs.fbest != self.PENALTY])
+        if not unity_positions:
+            # Preserve a usable mutation pool when every objective evaluation
+            # returned the configured penalty.
+            unity_positions = [
+                Position(cs.xbest, cs.fbest)
+                for cs in self.candidates[:self.nparticles]
+            ]
 
         # Track subpopulation-level diversity
         for subpop_div_list in self.DIV_GB_SUBPOP:
@@ -292,10 +316,13 @@ class DEEM:
             # Exploitation: Generate candidates near the global best (self.XBEST)
             # We add a normally distributed perturbation with a small standard deviation relative
             # to the overall search space (for example, 10% of the norm of (UB - LB)).
+            # without any successful evaluation the archive is empty: use the
+            # current personal bests as references instead
+            references = self.archive_elite or [Position(cs.xbest, cs.fbest) for cs in self.candidates]
             for _ in range(n_exploit):
                 #perturbation = np.random.normal(loc=0, scale=0.1 * np.linalg.norm(self.UB - self.LB), size=length)
-                idx_choice = np.random.randint(0, max(1, len(self.archive_elite) // 5))
-                xref = self.archive_elite[idx_choice].x
+                idx_choice = np.random.randint(0, max(1, len(references) // 5))
+                xref = references[idx_choice].x
                 lb_dist = [abs(xx - lbv) for xx, lbv in zip(xref, self.LB)]
                 ub_dist = [abs(xx - ubv) for xx, ubv in zip(xref, self.UB)]
                 dist = [min(ilb,iub) for ilb, iub in zip(lb_dist,ub_dist)]
@@ -478,10 +505,9 @@ class DEEM:
         self.niter_below_tolerance = 0
         start_time = time.time()
 
-        while self.iters <= self.maxiter:
+        while self.iters < self.maxiter:
             iter_start_time = time.time()
             self.positioning()
-            self.fev += self.nparticles
 
             # Check for duplicate positions and apply Levy-based shift if needed
             visited_positions = set()
@@ -497,19 +523,20 @@ class DEEM:
                             dx[i] = min(ilev * self.dist_ub_lb[i] / 50, ub_dist[i])
                         else:
                             dx[i] = max(ilev * self.dist_ub_lb[i] / 50, -lb_dist[i])
-                    cs.x += dx
+                    cs.x = cs.x + dx
                 else:
                     visited_positions.add(pos_tuple)
 
             # Evaluate candidate solutions
-            self.candidates = evaluate_cost_function(self.candidates, nworkers=self.nworkers)
+            self.candidates, n_real = evaluate_cost_function(self.candidates, nworkers=self.nworkers)
+            self.fev += n_real
             self.candidates.sort(key=lambda cs: cs.fbest)
 
             prev_best = self.FBEST
             if self.candidates[0].fbest < self.FBEST:
                 self.XBEST_history.append(self.XBEST)
                 self.FBEST_history.append(self.FBEST)
-                self.XBEST = self.candidates[0].xbest
+                self.XBEST = self.candidates[0].xbest.copy()
                 self.FBEST = self.candidates[0].fbest
 
             self.update_archive()
@@ -558,12 +585,12 @@ class DEEM:
                               self.fev, self.nparticles, self.nswarms,
                               self.nparticles_reset, np.round(self.DIV_NORM_GB, 4), extra_reset_flag))
 
+            self.FBEST0 = self.FBEST
+            self.iters += 1
+
             if ((self.termination == 'tolerance' and self.niter_below_tolerance >= self.maxiter_below_tolerance)
                 or (self.fev >= self.maxfev)):
                 break
-
-            self.FBEST0 = self.FBEST
-            self.iters += 1
 
         end_time = time.time()
         self.log.plot_results()

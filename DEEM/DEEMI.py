@@ -8,7 +8,7 @@
 """
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 #               DEEM - Differential Evolution with Elitism and Multi-populations
-#                            Copyright (C) 2023-2025 Jan Machacek
+#                            Copyright (C) 2023-2026 Jan Machacek
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 #
 # author: Jan Machacek, jan-machacek@outlook.com
@@ -50,6 +50,34 @@
 #   (8) Minor clean-ups: dead variables removed, object-list random choice replaced
 #       by an index draw, plotting made robust to a changing number of subpopulations.
 # 04.09.2026, J. Machacek - Reuse worker processes and report evaluation/overhead time
+# 07.09.2026, J. Machacek - more robust evaluation of niter_reset_global
+# 16.11.2026, J. Machacek - Synchronised with the copy in numgeo-ACT:
+#                         - non-finite objective values (NaN, +-inf) are mapped to the
+#                           penalty (FiniteObjective); a NaN could become the global best
+#                         - optional F0: known objective value of X0, which is then not
+#                           evaluated again (it still counts as one evaluation)
+#                         - maxiter is the number of generations after the initial
+#                           population (the loop ran maxiter + 1 generations); 'nit'
+#                           reports that number
+#                         - a generation in which every candidate returned the penalty
+#                           keeps the penalty candidates as mutation (and density-restart)
+#                           references instead of failing
+#                         - bounds and X0 are validated (finite, equal length, lb <= ub,
+#                           X0 inside the box)
+#                         - own random number generator: seed=... creates a
+#                           numpy.random.RandomState that every random draw uses instead
+#                           of numpy's global RNG; the stream of a seeded run is unchanged,
+#                           but no longer depends on other users of np.random
+#                         - one predicate for a failed evaluation everywhere: f >= penalty
+#                         - scale invariance: diversity measures and sub-population
+#                           distances are computed on positions rescaled by the bounds
+#                           (bit-identical results for boxes with equal spans); the
+#                           density restart uses the normalised diversity
+#                         - with a surrogate, a candidate that is not evaluated returns to
+#                           its personal best and does not feed the CR/phi adaptation
+#                         - new option restart_tail, default 0.1: no global restart in the
+#                           last 10 % of the budget (validated on the hold-out functions;
+#                           restart_tail=0 restores the former behaviour)
 #
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 """
@@ -64,7 +92,8 @@ from .population import Population, CandidateSolution
 from .boundary_conditions import enforce_BC
 from .logger import Logger
 from .toolbox import (Density, Levy, hashable_array, weighted_lehmer_mean,
-                      success_history_lehmer, space_filling_sample, covariance_seed)
+                      success_history_lehmer, space_filling_sample, covariance_seed,
+                      resolve_rng)
 from .sampling import sampling
 from .evaluation import evaluate_cost_function, create_evaluation_executor, EvalCache
 
@@ -79,17 +108,95 @@ class Position:
         self.f = f
 
 
+class FiniteObjective:
+    """
+    Objective wrapper that returns the penalty for a NaN or infinite result.
+
+    A NaN would otherwise compare False with everything, sort unpredictably and
+    could become (and then never leave) the global best. Picklable as long as
+    the wrapped function is, so it also works with the process pool.
+    """
+
+    def __init__(self, function, penalty: float):
+        self.function = function
+        self.penalty = penalty
+
+    def __call__(self, x):
+        value = self.function(x)
+        try:
+            finite = bool(np.isfinite(value))
+        except TypeError:
+            finite = False
+        if not finite:
+            return self.penalty
+        return value
+
+
+def validate_bounds(lower_bound, upper_bound, X0=None):
+    """
+    Check the search box and the optional start vector; return them as arrays.
+
+    lb == ub is allowed (a fixed parameter); lb > ub, non-finite values,
+    different lengths and an X0 outside the box raise a ValueError.
+    """
+    LB = np.atleast_1d(np.asarray(lower_bound, dtype=float))
+    UB = np.atleast_1d(np.asarray(upper_bound, dtype=float))
+    if LB.ndim != 1 or UB.ndim != 1 or LB.size == 0 or LB.shape != UB.shape:
+        raise ValueError("lower_bound and upper_bound must be non-empty 1-D sequences "
+                         f"of equal length; received shapes {LB.shape} and {UB.shape}.")
+    if not (np.all(np.isfinite(LB)) and np.all(np.isfinite(UB))):
+        raise ValueError("lower_bound and upper_bound must be finite.")
+    reversed_dims = np.flatnonzero(LB > UB)
+    if reversed_dims.size:
+        raise ValueError(f"lower_bound > upper_bound in dimension(s) {reversed_dims.tolist()}.")
+    if X0 is None:
+        return LB, UB, None
+    X0 = np.atleast_1d(np.asarray(X0, dtype=float))
+    if X0.shape != LB.shape:
+        raise ValueError(f"X0 must have the length of the bounds ({LB.size}); received shape {X0.shape}.")
+    if not np.all(np.isfinite(X0)):
+        raise ValueError("X0 must be finite.")
+    outside = np.flatnonzero((X0 < LB) | (X0 > UB))
+    if outside.size:
+        raise ValueError(f"X0 lies outside the bounds in dimension(s) {outside.tolist()}.")
+    return LB, UB, X0
+
+
+def make_rng(seed=None):
+    """
+    Random number generator of an optimiser run.
+
+    None returns numpy's global RNG (legacy behaviour: the run follows
+    np.random.seed). An int creates a numpy.random.RandomState with that seed,
+    whose stream equals the former np.random.seed(seed). A RandomState is used
+    as is; a numpy.random.Generator seeds a new RandomState from its stream.
+    """
+    # 16.11.2026, J. Machacek - Initial version
+    if seed is None:
+        return np.random.mtrand._rand
+    if isinstance(seed, np.random.RandomState):
+        return seed
+    if isinstance(seed, np.random.Generator):
+        return np.random.RandomState(int(seed.integers(0, 2**32 - 1)))
+    if isinstance(seed, (bool, np.bool_)) or not isinstance(seed, (int, np.integer)):
+        raise TypeError("seed must be None, an int, a RandomState or a Generator; "
+                        "received " + repr(seed) + ".")
+    return np.random.RandomState(int(seed))
+
+
 def bounded_cauchy_draw(location: float, scale: float,
                         lower: float = 0.0, upper: float = 1.0,
-                        max_attempts: int = 1000) -> float:
+                        max_attempts: int = 1000, rng=None) -> float:
     """
     Draw a sample from a Cauchy distribution ensuring it is within [lower, upper].
 
     Mirrors Algorithm 2 of the paper: values below 'lower' are resampled, values
-    above 'upper' are clipped to 'upper'.
+    above 'upper' are clipped to 'upper'. rng: numpy.random.RandomState
+    (None: numpy's global RNG).
     """
+    random_state = resolve_rng(rng)
     for _ in range(max_attempts):
-        val = cauchy.rvs(loc=location, scale=scale)
+        val = cauchy.rvs(loc=location, scale=scale, random_state=random_state)
         if val < lower:
             continue
         elif val > upper:
@@ -120,7 +227,8 @@ class DEEM:
                  method_reset: str = 'hybrid', niter_reset_global: int = None, penalty: float = 1e22,
                  adapt: bool = True, cache_tol: Optional[float] = None,
                  surrogate=None, seed: Optional[int] = None,
-                 restart_budget: Optional[int] = None):
+                 restart_budget: Optional[int] = None, F0: Optional[float] = None,
+                 restart_tail: float = 0.1):
         """
         Initialize the DEEM optimizer and create the initial candidate solutions.
 
@@ -139,13 +247,33 @@ class DEEM:
             observe(evaluated_candidates). None disables surrogate pre-screening.
             See DEEM.surrogate (RBFSurrogate/SurrogateManager and the
             Gaussian-process GPSurrogate/GPSurrogateManager).
-        seed : int or None
-            Seed for numpy's global RNG (reproducibility).
+        seed : int, numpy.random.RandomState, numpy.random.Generator or None
+            Seed of the optimiser's own random number generator (see make_rng);
+            every random draw, including the scrambling of the Sobol/Halton
+            engines, uses it, so a seeded run is reproducible even if the
+            objective draws random numbers. numpy's global RNG is not touched.
+            None uses numpy's global RNG (legacy behaviour).
         restart_budget : int or None
             Maximum number of global restarts (None = unlimited).
+
+        New (16.11.2026) keyword arguments
+        ----------------------------------
+        F0 : float or None
+            Known objective value of X0 (e.g. from a pre-flight evaluation).
+            X0 is then not evaluated again; the value still counts as one
+            function evaluation. Ignored without X0.
+        restart_tail : float
+            No global restart once less than this fraction of the budget
+            (iterations and function evaluations) remains (default 0.1: no
+            restart in the last 10 % of the run, whose evaluations are better
+            spent refining the best basin). 0 allows restarts until the end
+            (behaviour before 16.11.2026).
+
+        A NaN or infinite objective value is treated as the penalty. maxiter is
+        the number of generations after the initial population.
         """
-        if seed is not None:
-            np.random.seed(seed)
+        lower_bound, upper_bound, X0 = validate_bounds(lower_bound, upper_bound, X0)
+        self.rng = make_rng(seed)
 
         # Handle min/max particles
         self.nparticles_min = min(nparticles_min, nparticles_max)
@@ -157,8 +285,8 @@ class DEEM:
         # Penalty for infeasible or penalized solutions
         self.PENALTY = penalty
 
-        # Store settings
-        self.function = function
+        # Store settings; non-finite objective values become the penalty
+        self.function = FiniteObjective(function, self.PENALTY)
         self.maxiter = maxiter
         self.maxfev = maxfev
         self.fev = 0  # function evaluations (real objective calls)
@@ -168,7 +296,7 @@ class DEEM:
         # Tolerance tracking
         self.niter_below_tolerance = 0
         self.niter_above_tolerance = 0
-        self.niter_reset_global = niter_reset_global if niter_reset_global is not None else self.maxiter // 10
+        self.niter_reset_global = niter_reset_global if niter_reset_global is not None else max(1, self.maxiter // 10)
         self.global_reset_iter = 0
         self.tolerance = tolerance
         self.maxiter_below_tolerance = maxiter_below_tolerance
@@ -181,6 +309,9 @@ class DEEM:
         self.method_reset = method_reset
         self.restart_budget = restart_budget
         self.n_restarts = 0
+        if not 0.0 <= float(restart_tail) < 1.0:
+            raise ValueError("restart_tail must be in [0, 1).")
+        self.restart_tail = float(restart_tail)
 
         # Archive
         self.archive_elite: List[Position] = []
@@ -210,7 +341,7 @@ class DEEM:
         self.global_reset_condition = False
 
         # Density object for re-initialization (only used by method_reset='density')
-        self.Density = Density(LB=self.LB, UB=self.UB, num_bins=1000 * self.ndim)
+        self.Density = Density(LB=self.LB, UB=self.UB, num_bins=1000 * self.ndim, rng=self.rng)
 
         # Optional evaluation cache
         self.cache = EvalCache(self.LB, self.UB, rel_tol=cache_tol) if cache_tol is not None else None
@@ -235,28 +366,46 @@ class DEEM:
 
         # -- Initialize candidate solutions --
         print(f"... generate initial positions: {self.sampling_method}")
-        samples = sampling(self.nparticles, self.ndim, self.LB, self.UB, self.sampling_method)
+        samples = sampling(self.nparticles, self.ndim, self.LB, self.UB, self.sampling_method, rng=self.rng)
         self.candidates: List[CandidateSolution] = [
-            CandidateSolution(x0=samples[i, :], function=self.function)
+            CandidateSolution(x0=samples[i, :], function=self.function, rng=self.rng)
             for i in range(self.nparticles)
         ]
 
         # Optional initial guess
+        to_evaluate = self.candidates
+        n_known = 0
         if X0 is not None:
             self.candidates[0].x = np.asarray(X0, dtype=float)
+            if F0 is not None:
+                known = float(F0)
+                if not np.isfinite(known):
+                    known = self.PENALTY
+                first = self.candidates[0]
+                first.f = first.fbest = first.fbest0 = known
+                first.xbest = first.x.copy()
+                first.xbest0 = first.x.copy()
+                first.improved = True
+                first.initialized = True
+                first.niter_xbest = 1
+                if self.cache is not None:
+                    self.cache.put(first.x, known)
+                to_evaluate = self.candidates[1:]
+                n_known = 1
 
         print("... evaluate fitness of initial positions")
         evaluation_start = time.perf_counter()
         try:
-            self.candidates, n_real = evaluate_cost_function(
-                self.candidates, nworkers=self.nworkers, cache=self.cache,
+            # Candidates are updated in place (serial) or copied back (pool).
+            _, n_real = evaluate_cost_function(
+                to_evaluate, nworkers=self.nworkers, cache=self.cache,
                 executor=self._executor)
         except Exception:
             self.close()
             raise
         self.initial_evaluation_time = time.perf_counter() - evaluation_start
         self.evaluation_time += self.initial_evaluation_time
-        self.fev += n_real
+        self.fev += n_real + n_known
 
         # Sort and track best
         self.candidates.sort(key=lambda cs: cs.fbest)
@@ -268,16 +417,14 @@ class DEEM:
 
         print(f"... best cost: {self.FBEST}\n")
 
-        penalties_count = sum(1 for cs in self.candidates if cs.f == self.PENALTY)
+        penalties_count = sum(1 for cs in self.candidates if self.failed(cs.f))
         print(f"penalties = {penalties_count}")
 
         self.update_archive()
 
         # Compute initial diversity stats
-        pos_matrix_gbest = np.array([cs.xbest for cs in self.candidates])
-        self.DIV_GB0 = np.mean(np.mean(np.abs(np.median(pos_matrix_gbest, axis=0) - pos_matrix_gbest), axis=0), axis=0)
-        pos_matrix_curr = np.array([cs.x for cs in self.candidates])
-        self.DIV_CB0 = np.mean(np.mean(np.abs(np.median(pos_matrix_curr, axis=0) - pos_matrix_curr), axis=0), axis=0)
+        self.DIV_GB0 = self.diversity([cs.xbest for cs in self.candidates])
+        self.DIV_CB0 = self.diversity([cs.x for cs in self.candidates])
 
         self.DIV_NORM_GB = 1.0
         self.DIV_NORM_CB = 1.0
@@ -291,6 +438,35 @@ class DEEM:
         self.log.plot_initial_distribution(self.candidates)
 
     # ------------------------------------------------------------------ #
+    #  Helpers                                                           #
+    # ------------------------------------------------------------------ #
+    def failed(self, f: float) -> bool:
+        """
+        True for a failed (penalised) evaluation: f >= penalty.
+
+        16.11.2026, J. Machacek - the single predicate used everywhere (archives,
+        mutation pool, reports); non-finite values are already the penalty.
+        """
+        return not (f < self.PENALTY)
+
+    def remaining_budget(self) -> float:
+        """Fraction of the budget (the smaller of iterations and evaluations) left."""
+        # 16.11.2026, J. Machacek - Initial version (option restart_tail)
+        left_iterations = 1.0 - self.iters / max(1, self.maxiter)
+        left_evaluations = 1.0 - self.fev / max(1, self.maxfev)
+        return min(left_iterations, left_evaluations)
+
+    def diversity(self, positions) -> float:
+        """
+        Mean absolute deviation of the positions from their median, measured on
+        positions rescaled to the span of the widest dimension (16.11.2026,
+        J. Machacek - scale invariant; it was computed in raw parameter units, so
+        wide parameters dominated).
+        """
+        U = Population.scaled_positions(np.asarray(positions, dtype=float), self.LB, self.UB)
+        return float(np.mean(np.mean(np.abs(np.median(U, axis=0) - U), axis=0), axis=0))
+
+    # ------------------------------------------------------------------ #
     #  Restart position generators                                       #
     # ------------------------------------------------------------------ #
     def _restart_positions_density(self, n: int) -> List[np.ndarray]:
@@ -298,21 +474,25 @@ class DEEM:
         Original restart: exploit near archive elites (per-dimension Gaussian) and
         explore via the density-based least-visited sampler.
         """
-        if self.DIV_GB > 0.666:
+        # 16.11.2026, J. Machacek - normalised diversity (scale invariant)
+        if self.DIV_NORM_GB > 0.666:
             n_exploit = int(np.ceil(0.5 * n))
-        elif self.DIV_GB > 0.333:
+        elif self.DIV_NORM_GB > 0.333:
             n_exploit = int(np.ceil(0.25 * n))
         else:
             n_exploit = max(2, int(np.ceil(0.1 * n)))
         n_explore = n - n_exploit
         out = []
+        # 16.11.2026, J. Machacek - without any successful evaluation the archive
+        # is empty: use the current personal bests as references instead
+        references = self.archive_elite or [Position(cs.xbest, cs.fbest) for cs in self.candidates]
         for _ in range(n_exploit):
-            idx_choice = np.random.randint(0, max(1, len(self.archive_elite) // 5))
-            xref = self.archive_elite[idx_choice].x
+            idx_choice = self.rng.randint(0, max(1, len(references) // 5))
+            xref = references[idx_choice].x
             lb_dist = np.abs(xref - self.LB)
             ub_dist = np.abs(xref - self.UB)
             dist = np.minimum(lb_dist, ub_dist)
-            R = xref + dist * np.random.normal(loc=0, scale=0.1, size=self.ndim)
+            R = xref + dist * self.rng.normal(loc=0, scale=0.1, size=self.ndim)
             out.append(np.clip(R, self.LB, self.UB))
         for _ in range(n_explore):
             out.append(self.Density.improved_least_visited_position())
@@ -356,11 +536,11 @@ class DEEM:
 
         for k in range(n_exploit):
             centre = elites[k % len(elites)]
-            seeded = covariance_seed(centre, members, self.LB, self.UB, n=1, shrink=0.25)
+            seeded = covariance_seed(centre, members, self.LB, self.UB, n=1, shrink=0.25, rng=self.rng)
             out.append(seeded[0])
 
         if n_explore > 0:
-            fill = space_filling_sample(n_explore, self.LB, self.UB)
+            fill = space_filling_sample(n_explore, self.LB, self.UB, rng=self.rng)
             out.extend([fill[i] for i in range(n_explore)])
         return out
 
@@ -371,7 +551,7 @@ class DEEM:
         even before re-evaluation.
         """
         cs = CandidateSolution(x0=np.asarray(x, dtype=float), function=self.function,
-                               subpop_index=self.candidates[0].subpop_index)
+                               subpop_index=self.candidates[0].subpop_index, rng=self.rng)
         if is_global_best:
             cs.x = self.XBEST.copy()
             cs.xbest = self.XBEST.copy()
@@ -407,7 +587,8 @@ class DEEM:
         # Check if reinitialization is required
         self.NPRESET = 0
         self.reset_subswarms = False
-        budget_ok = (self.restart_budget is None) or (self.n_restarts < self.restart_budget)
+        budget_ok = (((self.restart_budget is None) or (self.n_restarts < self.restart_budget))
+                     and self.remaining_budget() >= self.restart_tail)
         self.global_reset_condition = budget_ok and (
             self.niter_below_tolerance > self.niter_reset_global or self.DIV_NORM_GB < 1e-2)
         if self.global_reset_condition:
@@ -441,7 +622,15 @@ class DEEM:
         # Merge archive elites and current best solutions
         unity_positions = (self.archive_elite +
                            [Position(cs.xbest, cs.fbest) for cs in self.candidates[:self.nparticles]
-                            if cs.fbest != self.PENALTY])
+                            if not self.failed(cs.fbest)])
+        if not unity_positions:
+            # A generation in which every evaluation failed is still a valid
+            # optimiser state. Keep the penalty candidates as mutation references
+            # so the generation can finish instead of sampling from an empty pool.
+            unity_positions = [
+                Position(cs.xbest, cs.fbest)
+                for cs in self.candidates[:self.nparticles]
+            ]
 
         # Track subpopulation-level diversity
         for subpop_div_list in self.DIV_GB_SUBPOP:
@@ -459,8 +648,7 @@ class DEEM:
             nparticles_reset_this_iter = 0
             for isubpop, subpop in enumerate(subpopulations):
                 # Compute subpopulation diversity
-                pos_matrix = np.array([cs.xbest for cs in subpop])
-                current_div = np.mean(np.mean(np.abs(np.median(pos_matrix, axis=0) - pos_matrix), axis=0), axis=0)
+                current_div = self.diversity([cs.xbest for cs in subpop])
                 self.DIV_GB_SUBPOP[isubpop][-1] = current_div
 
                 base_div = max(self.DIV_GB_SUBPOP[isubpop][0], 1e-12)
@@ -493,7 +681,7 @@ class DEEM:
                     cs.x0 = cs.x.copy()
 
                     # DE_CR ~ Cauchy around CR
-                    cs.DE_CR = bounded_cauchy_draw(location=CR, scale=0.2)
+                    cs.DE_CR = bounded_cauchy_draw(location=CR, scale=0.2, rng=self.rng)
 
                     # phi location: diversity-driven, optionally blended with success
                     if isubpop < 2:
@@ -504,23 +692,24 @@ class DEEM:
                         PHI = float(np.clip(0.5 * PHI_div + 0.5 * PHI_success, 0.0, 1.0))
                     else:
                         PHI = float(np.clip(PHI_div, 0.0, 1.0))
-                    cs.phi = bounded_cauchy_draw(location=PHI, scale=0.1)
+                    cs.phi = bounded_cauchy_draw(location=PHI, scale=0.1, rng=self.rng)
 
                     # second blend factor phi2 (diversity-driven)
                     PHI2 = float(np.clip(0.50 + (0.5 - self.DIV_NORM_GB), 0.0, 1.0))
-                    phi2 = bounded_cauchy_draw(location=PHI2, scale=0.2)
+                    phi2 = bounded_cauchy_draw(location=PHI2, scale=0.2, rng=self.rng)
 
                     if cs.randomize:
                         nparticles_reset_this_iter += 1
                         R = self.Density.improved_least_visited_position()
-                        cs = CandidateSolution(x0=R, function=cs.function, subpop_index=cs.subpop_index)
+                        cs = CandidateSolution(x0=R, function=cs.function, subpop_index=cs.subpop_index,
+                                               rng=self.rng)
                     elif cs.elite:
                         if isubpop != 0:
                             r: List[Position] = [Position(self.XBEST, self.FBEST)]
                             max_tries = 10 * self.nparticles
                             distinct_positions: List[Position] = []
                             while len(distinct_positions) < 3 and max_tries > 0:
-                                candidate = unity_positions[np.random.randint(0, len(unity_positions))]
+                                candidate = unity_positions[self.rng.randint(0, len(unity_positions))]
                                 if (not np.array_equal(candidate.x, cs.xbest)
                                         and all(not np.array_equal(candidate.x, d.x) for d in distinct_positions)
                                         and not np.array_equal(candidate.x, r[0].x)):
@@ -529,14 +718,14 @@ class DEEM:
                             r.extend(distinct_positions)
                             r.sort(key=lambda rp: rp.f)
                             A = (cs.phi * cs.xbest + (1. - cs.phi) * r[0].x + (r[1].x - r[2].x) * phi2) if len(r) >= 3 else cs.xbest
-                            j_rand = np.random.randint(0, self.ndim)
-                            mask = (np.random.rand(length) <= cs.DE_CR) | (np.arange(length) == j_rand)
+                            j_rand = self.rng.randint(0, self.ndim)
+                            mask = (self.rng.rand(length) <= cs.DE_CR) | (np.arange(length) == j_rand)
                             cs.x = np.where(mask, A, self.XBEST)
                         else:
                             lb_dist = np.abs(cs.xbest - self.LB)
                             ub_dist = np.abs(cs.xbest - self.UB)
                             dx = np.ones(self.ndim)
-                            lev = Levy(self.ndim, beta=1.99)
+                            lev = Levy(self.ndim, beta=1.99, rng=self.rng)
                             for i, ilev in enumerate(lev):
                                 if ilev > 0:
                                     dx[i] = min(ilev * self.dist_ub_lb[i] / 50, 0.995 * ub_dist[i])
@@ -547,18 +736,18 @@ class DEEM:
                         r = []
                         max_tries = 10 * self.nparticles
                         while len(r) < 2 and max_tries > 0:
-                            idx_choice = np.random.randint(1, len(subpop))
+                            idx_choice = self.rng.randint(1, len(subpop))
                             candidate = subpop[idx_choice]
                             if not np.array_equal(candidate.xbest, cs.xbest) and all(not np.array_equal(candidate.xbest, rr.x) for rr in r):
                                 r.append(Position(candidate.xbest, candidate.fbest))
                             max_tries -= 1
                         r.sort(key=lambda rp: rp.f)
                         A = (cs.phi * cs.xbest + (1. - cs.phi) * SB + (r[0].x - r[1].x) * phi2) if len(r) >= 2 else cs.xbest
-                        j_rand = np.random.randint(0, self.ndim)
-                        mask = (np.random.rand(length) <= cs.DE_CR) | (np.arange(length) == j_rand)
+                        j_rand = self.rng.randint(0, self.ndim)
+                        mask = (self.rng.rand(length) <= cs.DE_CR) | (np.arange(length) == j_rand)
                         cs.x = np.where(mask, A, SB)
 
-                    cs.enforce_BC(lb=self.LB, ub=self.UB, ref=SB, method=self.method_boundary)
+                    cs.enforce_BC(lb=self.LB, ub=self.UB, ref=SB, method=self.method_boundary, rng=self.rng)
                     updated_candidates.append(cs)
 
         # Update the candidates list (CandidateSolution.__deepcopy__ keeps the
@@ -586,11 +775,11 @@ class DEEM:
         if self.iters > 0:
             tmp = [Position(x=cs.xbest, f=cs.fbest)
                    for cs in self.candidates[:self.nparticles]
-                   if cs.fbest != self.PENALTY]
+                   if not self.failed(cs.fbest)]
         else:
             tmp = [Position(x=cs.xbest0, f=cs.fbest0)
                    for cs in self.candidates[:self.nparticles]
-                   if cs.fbest0 != self.PENALTY]
+                   if not self.failed(cs.fbest0)]
 
         for pos_obj in (self.archive_elite + tmp):
             xbest_tuple = hashable_array(pos_obj.x)
@@ -603,9 +792,9 @@ class DEEM:
         unique_x = set()
         unique_positions = []
         if self.iters > 0:
-            tmp2 = [cs for cs in self.candidates if (not cs.improved and cs.f != self.PENALTY)]
+            tmp2 = [cs for cs in self.candidates if (not cs.improved and not self.failed(cs.f))]
         else:
-            tmp2 = [cs for cs in self.candidates if cs.f != self.PENALTY]
+            tmp2 = [cs for cs in self.candidates if not self.failed(cs.f)]
 
         for cs in (self.archive + tmp2):
             x_tuple = hashable_array(cs.x)
@@ -613,7 +802,7 @@ class DEEM:
                 unique_positions.append(Position(cs.x, cs.f))
                 unique_x.add(x_tuple)
         if len(unique_positions) > self.archive_size:
-            np.random.shuffle(unique_positions)
+            self.rng.shuffle(unique_positions)
             unique_positions = unique_positions[:2 * self.archive_size]
         self.archive = unique_positions
 
@@ -652,7 +841,7 @@ class DEEM:
         start_time = time.time()
         update_evaluation_start = self.evaluation_time
 
-        while self.iters <= self.maxiter:
+        while self.iters < self.maxiter:
             iter_start_time = time.time()
             self.positioning()
 
@@ -664,7 +853,7 @@ class DEEM:
                     lb_dist = np.abs(cs.x - self.LB)
                     ub_dist = np.abs(cs.x - self.UB)
                     dx = np.ones(self.ndim)
-                    lev = Levy(self.ndim, beta=1.99)
+                    lev = Levy(self.ndim, beta=1.99, rng=self.rng)
                     for i, ilev in enumerate(lev):
                         if ilev > 0:
                             dx[i] = min(ilev * self.dist_ub_lb[i] / 50, ub_dist[i])
@@ -685,6 +874,16 @@ class DEEM:
                     executor=self._executor)
                 iteration_evaluation_time = time.perf_counter() - evaluation_start
                 self.surrogate.observe(to_eval)
+                # 16.11.2026, J. Machacek - a skipped candidate returns to its
+                # personal best: its trial position was never evaluated, so the
+                # (x, f) pair stays consistent, and its success flag of the
+                # previous generation must not feed the CR/phi adaptation again.
+                evaluated = set(eval_idx)
+                for i, cs in enumerate(self.candidates):
+                    if i not in evaluated:
+                        cs.x = cs.xbest.copy()
+                        cs.f = cs.fbest
+                        cs.improved = False
             else:
                 evaluation_start = time.perf_counter()
                 self.candidates, n_real = evaluate_cost_function(
@@ -707,10 +906,8 @@ class DEEM:
             self.update_archive()
             self.Density.update_density(positions=[cs.x for cs in self.candidates])
 
-            pos_matrix_gbest = np.array([cs.xbest for cs in self.candidates])
-            self.DIV_GB = np.mean(np.mean(np.abs(np.median(pos_matrix_gbest, axis=0) - pos_matrix_gbest), axis=0), axis=0)
-            pos_matrix_curr = np.array([cs.x for cs in self.candidates])
-            self.DIV_CB = np.mean(np.mean(np.abs(np.median(pos_matrix_curr, axis=0) - pos_matrix_curr), axis=0), axis=0)
+            self.DIV_GB = self.diversity([cs.xbest for cs in self.candidates])
+            self.DIV_CB = self.diversity([cs.x for cs in self.candidates])
 
             self.DIV_NORM_GB = min(self.DIV_GB / max(self.DIV_GB0, 1e-12), 1.0)
             self.DIV_NORM_CB = min(self.DIV_CB / max(self.DIV_CB0, 1e-12), 1.0)
@@ -751,12 +948,12 @@ class DEEM:
                               self.fev, self.nparticles, self.nswarms,
                               self.nparticles_reset, np.round(self.DIV_NORM_GB, 4), extra_reset_flag))
 
+            self.FBEST0 = self.FBEST
+            self.iters += 1
+
             if ((self.termination == 'tolerance' and self.niter_below_tolerance >= self.maxiter_below_tolerance)
                     or (self.fev >= self.maxfev)):
                 break
-
-            self.FBEST0 = self.FBEST
-            self.iters += 1
 
         end_time = time.time()
         update_evaluation_time = self.evaluation_time - update_evaluation_start

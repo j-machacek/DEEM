@@ -8,7 +8,7 @@
 """
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 #               DEEM - Differential Evolution with Elitism and Multi-populations
-#                            Copyright (C) 2023-2025 Jan Machacek  
+#                            Copyright (C) 2023-2026 Jan Machacek  
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 #
 # author: Jan Machacek, jan-machacek@outlook.com
@@ -24,6 +24,10 @@
 # History:
 # 05.02.2023, J. Machacek - Initial version
 # 07.02.2025, J. Machacek - Improved code by adding A), B) and C)
+# 16.11.2026, J. Machacek - A degenerate interval (ub <= lb, a fixed parameter) returns lb
+#                           instead of dividing by zero in the periodic map
+# 16.11.2026, J. Machacek - Optional rng argument (numpy.random.RandomState interface;
+#                           None = numpy's global RNG) for all randomised methods
 #
 # Improvements:
 # A) Fixed typos (e.g., 'radom' -> 'random')
@@ -36,7 +40,12 @@
 import numpy as np
 
 
-def enforce_BC_random(x: float, lb: float, ub: float, ref: float, max_iter: int = 100) -> float:
+def _rng(rng):
+    # 16.11.2026, J. Machacek - None selects numpy's global RNG (legacy behaviour)
+    return np.random.mtrand._rand if rng is None else rng
+
+
+def enforce_BC_random(x: float, lb: float, ub: float, ref: float, max_iter: int = 100, rng=None) -> float:
     """
     Enforce boundary conditions using a randomized reinitialization strategy.
     
@@ -64,13 +73,13 @@ def enforce_BC_random(x: float, lb: float, ub: float, ref: float, max_iter: int 
     if x < lb or x > ub:
         counter = 0
         while (x < lb or x > ub) and counter < max_iter:
-            x = ref + (x - ref) / (1.0 + np.random.random())
+            x = ref + (x - ref) / (1.0 + _rng(rng).random())
             counter += 1
         x = np.clip(x, lb, ub)
     return x
 
 
-def enforce_BC_damping(x: float, lb: float, ub: float) -> float:
+def enforce_BC_damping(x: float, lb: float, ub: float, rng=None) -> float:
     """
     Enforce boundary conditions using a damping strategy.
     
@@ -91,7 +100,7 @@ def enforce_BC_damping(x: float, lb: float, ub: float) -> float:
     float
         The adjusted coordinate within [lb, ub].
     """
-    r = np.random.random()
+    r = _rng(rng).random()
     max_dist = ub - lb
     if x < lb:
         dist = min(lb - x, max_dist)
@@ -102,7 +111,7 @@ def enforce_BC_damping(x: float, lb: float, ub: float) -> float:
     return x
 
 
-def enforce_BC_periodic(x: float, lb: float, ub: float) -> float:
+def enforce_BC_periodic(x: float, lb: float, ub: float, rng=None) -> float:
     """
     Enforce boundary conditions using a periodic (wrap-around) strategy.
     
@@ -122,7 +131,7 @@ def enforce_BC_periodic(x: float, lb: float, ub: float) -> float:
     float
         The adjusted coordinate within [lb, ub].
     """
-    r = np.random.random()
+    r = _rng(rng).random()
     max_dist = ub - lb
     if x < lb:
         dist = lb - x
@@ -135,7 +144,7 @@ def enforce_BC_periodic(x: float, lb: float, ub: float) -> float:
     return x
 
 
-def _apply_method(x: float, lb: float, ub: float, ref: float, method: str) -> float:
+def _apply_method(x: float, lb: float, ub: float, ref: float, method: str, rng=None) -> float:
     """
     Helper function to apply the chosen boundary condition enforcement method to a single coordinate.
 
@@ -164,30 +173,34 @@ def _apply_method(x: float, lb: float, ub: float, ref: float, method: str) -> fl
     ValueError
         If an unknown method is provided.
     """
+    if ub <= lb:
+        # Degenerate interval: the periodic map would divide by ub - lb = 0.
+        return float(lb)
     if method == 'clip':
         return float(np.clip(x, lb, ub))
     elif method == 'random':
-        return enforce_BC_random(x, lb, ub, ref)
+        return enforce_BC_random(x, lb, ub, ref, rng=rng)
     elif method == 'damping':
-        return enforce_BC_damping(x, lb, ub)
+        return enforce_BC_damping(x, lb, ub, rng=rng)
     elif method == 'periodic':
-        return enforce_BC_periodic(x, lb, ub)
+        return enforce_BC_periodic(x, lb, ub, rng=rng)
     elif method == 'damping-periodic':
-        return enforce_BC_damping(x, lb, ub) if np.random.random() >= 0.5 else enforce_BC_periodic(x, lb, ub)
+        return (enforce_BC_damping(x, lb, ub, rng=rng) if _rng(rng).random() >= 0.5
+                else enforce_BC_periodic(x, lb, ub, rng=rng))
     elif method == 'damping-periodic-random':
-        r = np.random.random()
+        r = _rng(rng).random()
         if r <= 0.33:
-            return enforce_BC_damping(x, lb, ub)
+            return enforce_BC_damping(x, lb, ub, rng=rng)
         elif r <= 0.66:
-            return enforce_BC_periodic(x, lb, ub)
+            return enforce_BC_periodic(x, lb, ub, rng=rng)
         else:
-            return enforce_BC_random(x, lb, ub, ref)
+            return enforce_BC_random(x, lb, ub, ref, rng=rng)
     elif method == 'damping-periodic-clip':
-        r = np.random.random()
+        r = _rng(rng).random()
         if r <= 0.33:
-            return enforce_BC_damping(x, lb, ub)
+            return enforce_BC_damping(x, lb, ub, rng=rng)
         elif r <= 0.66:
-            return enforce_BC_periodic(x, lb, ub)
+            return enforce_BC_periodic(x, lb, ub, rng=rng)
         else:
             return float(np.clip(x, lb, ub))
     else:
@@ -198,7 +211,7 @@ def _apply_method(x: float, lb: float, ub: float, ref: float, method: str) -> fl
         )
 
 
-def enforce_BC(x, lb, ub, ref, method: str = 'random'):
+def enforce_BC(x, lb, ub, ref, method: str = 'random', rng=None):
     """
     Enforce boundary conditions on a vector x using the specified method.
     
@@ -221,6 +234,8 @@ def enforce_BC(x, lb, ub, ref, method: str = 'random'):
             'clip', 'random', 'damping', 'periodic',
             'damping-periodic', 'damping-periodic-random', 'damping-periodic-clip'.
         Default is 'random'.
+    rng : numpy.random.RandomState or None
+        Random number generator (None: numpy's global RNG).
 
     Returns
     -------
@@ -234,5 +249,5 @@ def enforce_BC(x, lb, ub, ref, method: str = 'random'):
     ref = list(ref)
 
     for i in range(len(x)):
-        x[i] = _apply_method(x[i], lb[i], ub[i], ref[i], method)
+        x[i] = _apply_method(x[i], lb[i], ub[i], ref[i], method, rng=rng)
     return x

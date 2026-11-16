@@ -97,8 +97,15 @@ them twice.
 
 ### Reproducibility and reporting — `seed`, return value
 
-Passing `seed` seeds NumPy's global RNG for reproducible runs. `DEEMI.update()`
-additionally returns a structured result dictionary:
+Passing `seed` gives the run its **own** random number generator (a
+`numpy.random.RandomState` seeded with it), which every random draw uses. A seeded
+run is reproducible even if the objective draws from `np.random`, it leaves
+NumPy's global RNG untouched, and its result does not depend on `nworkers`. The
+stream is the same as with the former `np.random.seed(seed)`; see the
+[reference](reference/deemi.md#changes-of-fixed-seed-results) for the changes of
+16.11.2026 that do alter fixed-seed results. `seed=None` draws from NumPy's global
+RNG (legacy behaviour). `DEEMI.update()` additionally returns a structured result
+dictionary:
 
 ```python
 result = opt.update()
@@ -116,6 +123,26 @@ adding extra objective calls.
 
 `restart_budget` caps the number of global restarts (`None` = unlimited).
 
+### Robust core (16.11.2026)
+
+- **Failed evaluations.** NaN and infinite objective values are replaced by the
+  `penalty`; a value `>= penalty` counts as a failed evaluation everywhere (archive,
+  mutation pool, reports). A generation in which every evaluation fails still
+  completes.
+- **Known start value — `F0`.** If the objective value of `X0` is already known
+  (e.g. from a pre-flight check), pass it as `F0`; `X0` is not evaluated again.
+- **Budget.** `maxiter` is the number of generations after the initial population;
+  `nfev` counts every real objective call.
+- **Validation.** Bounds and `X0` are checked before anything is evaluated.
+- **No late restart — `restart_tail`.** By default no global restart is triggered
+  in the last 10 % of the budget; those evaluations refine the best basin instead.
+- **Scale invariance.** Diversity and sub-population distances are measured on
+  positions rescaled by the bounds, so the search does not depend on the units of
+  the parameters.
+
+See the [API reference](reference/deemi.md#behaviour-of-the-core) for the exact
+rules and the [validation](validation.md) page for the benchmark evidence.
+
 ## Parallel evaluation on Windows
 
 `DEEMI` evaluates candidate solutions through a process pool when `nworkers > 1`.
@@ -126,10 +153,13 @@ start method. The pool is closed automatically when `update()` returns or raises
 an exception; `close()` is also available for explicitly releasing it before an
 optimisation is run.
 
-On Windows, worker processes do not inherit the parent's runtime state. The pool
-therefore uses an **initializer** that re-establishes the required state (e.g. the
-`ACT.globals` used by numgeo-ACT) in every worker. On Linux the state is inherited
-through `fork`. See the [calibration example](examples/calibration.md).
+On Windows, worker processes do not inherit the parent's runtime state. If the
+objective reads module-level settings that are configured at runtime, register a
+pair of functions with `DEEM.evaluation.register_worker_state(capture, restore)`:
+`capture()` runs in the main process when the pool is created, and its picklable
+result is passed to `restore(data)` once in every worker (numgeo-ACT registers its
+calibration settings this way). On Linux the state is inherited through `fork`.
+See the [calibration example](examples/calibration.md).
 
 ## Summary of new constructor arguments
 
@@ -139,7 +169,9 @@ through `fork`. See the [calibration example](examples/calibration.md).
 | `adapt` | `True` | SHADE-style improvement-weighted adaptation of $CR$ / $\phi$ |
 | `cache_tol` | `None` | relative tolerance of the evaluation cache (`None` = off) |
 | `surrogate` | `None` | surrogate manager for pre-screening (`None` = off) |
-| `seed` | `None` | seed for NumPy's global RNG |
+| `seed` | `None` | seed of the optimiser's own RNG (`None`: NumPy's global RNG) |
 | `restart_budget` | `None` | maximum number of global restarts |
+| `F0` | `None` | known objective value of `X0` (not evaluated again) |
+| `restart_tail` | `0.1` | no global restart in the last fraction of the budget |
 
 See the [DEEMI API reference](reference/deemi.md) for the full signature.

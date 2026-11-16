@@ -52,12 +52,12 @@ DEEM(
 
 | Argument | Default | Description |
 | -------- | ------- | ----------- |
-| `maxiter` | `1000` | Maximum number of iterations $n_i^{max}$. |
+| `maxiter` | `1000` | Maximum number of generations $n_i^{max}$ after the initial population. |
 | `maxfev` | `1e8` | Maximum number of function evaluations $n_f^{max}$. |
 | `termination` | `'iterations'` | `'iterations'` runs the full `maxiter`; `'tolerance'` stops early. |
 | `tolerance` | `1e-6` | Early-termination tolerance $TOL$. |
 | `maxiter_below_tolerance` | `30` | Iterations below $TOL$ before stopping ($n_i^{TOL}$). |
-| `niter_reset_global` | `None` | Restart threshold $n_i^{res}$; defaults to `maxiter // 10`. |
+| `niter_reset_global` | `None` | Restart threshold $n_i^{res}$; defaults to `max(1, maxiter // 10)`. |
 
 ### Sampling, boundaries, restart, misc
 
@@ -68,7 +68,7 @@ DEEM(
 | `method_reset` | `'density'` | Restart strategy (base algorithm: `density`). |
 | `nworkers` | `1` | Parallel workers for evaluation (`1` = serial). |
 | `log_interval` | `1` | Iterations between log lines. |
-| `penalty` | `1e22` | Value treated as the penalty/infeasible marker. |
+| `penalty` | `1e22` | Value treated as the penalty/infeasible marker; NaN and infinite objective values are replaced by it. |
 
 ## Methods
 
@@ -89,9 +89,21 @@ After `update()` returns, read the result from:
 | --------- | ----------- |
 | `XBEST` | Best position found, $\mathbf{x}_{GB}$. |
 | `FBEST` | Best objective value found. |
-| `fev` | Number of function evaluations performed. |
+| `fev` | Number of real objective evaluations, including the initial population. |
 | `XBEST_history`, `FBEST_history` | History of improvements to the global best. |
-| `iters` | Number of iterations executed. |
+| `iters` | Number of generations performed after the initial population. |
+
+!!! note "Corrections of 16.11.2026"
+
+    The published class is kept as the reference implementation of the paper; only
+    defects were corrected: the run no longer fails on the `(candidates, n_real)`
+    return value of `evaluate_cost_function`, `fev` counts the real evaluations
+    including the initial population, `maxiter` generations follow the initial
+    population (the loop ran `maxiter + 1`), NaN/inf objective values become the
+    penalty, a generation in which every evaluation fails completes, the bounds and
+    `X0` are validated, and the sub-populations are formed with distances on
+    positions rescaled by the bounds (see the [DEEMI reference](deemi.md#behaviour-of-the-core)).
+    The class draws from NumPy's global RNG; seed it with `np.random.seed(...)`.
 
 !!! tip "Objective convention"
 

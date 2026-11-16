@@ -7,13 +7,16 @@ here for completeness and for advanced customisation.
 ## `DEEM.sampling`
 
 Initial-sampling strategies used to place the first population. The dispatcher
-`sampling(nparticles, dim, lower_bound, upper_bound, method)` selects one of:
+`sampling(nparticles, dim, lower_bound, upper_bound, method, rng=None)` selects one
+of the methods below; `rng` is a `numpy.random.RandomState` (`None`: NumPy's
+global RNG). `scrambled_qmc_engine(engine_class, dim, rng)` creates a scrambled
+SciPy QMC engine whose seed is drawn from `rng`.
 
 | `method` | Function | Notes |
 | -------- | -------- | ----- |
 | `'LHS'` | `latin_hypercube_sampling` | Latin hypercube (default). |
 | `'Random-Uniform'` | `random_uniform` | Independent uniform draws. |
-| `'Sobol'` | `initial_sampling_sobol` | Low-discrepancy Sobol sequence. |
+| `'Sobol'` | `initial_sampling_sobol` | Low-discrepancy Sobol sequence (SciPy's engine, unscrambled, first point skipped). |
 | `'Halton'` | `halton_sampling` | Low-discrepancy Halton sequence. |
 | `'Grid'` | `grid_sampling` | Regular grid. |
 
@@ -23,13 +26,13 @@ Boundary-repair operators (see [Boundary conditions](../theory/boundary-conditio
 The entry point is
 
 ```python
-enforce_BC(x, lb, ub, ref, method='random')
+enforce_BC(x, lb, ub, ref, method='random', rng=None)
 ```
 
 which dispatches to `enforce_BC_damping`, `enforce_BC_periodic`,
 `enforce_BC_random` and their combinations. Accepted `method` strings: `clip`,
 `random`, `damping`, `periodic`, `damping-periodic`, `damping-periodic-random`,
-`damping-periodic-clip`.
+`damping-periodic-clip`. A dimension with `lb == ub` returns `lb`.
 
 ## `DEEM.population`
 
@@ -40,25 +43,29 @@ Defines the data structures and sub-population manager:
   Its `update_cost()` evaluates the objective and updates the personal best.
 - **`Population`** — builds and manages sub-populations, including the reduction
   schedule (`method_subpop_reduction`) and creation strategy
-  (`method_subpop_creation`).
+  (`method_subpop_creation`). Distances are measured on
+  `Population.scaled_positions(X, LB, UB)` (every dimension rescaled to the span of
+  the widest one), so the sub-populations do not depend on parameter units.
 
 ## `DEEM.evaluation`
 
 Evaluates a list of candidate solutions, serially or in parallel.
 
 ```python
-evaluate_cost_function(particles, nworkers=1, mode='process', cache=None)
+evaluate_cost_function(particles, nworkers=1, mode='process', cache=None, executor=None)
+register_worker_state(capture, restore)
 ```
 
 - `nworkers=1` evaluates serially in the main process.
 - `nworkers>1` uses a thread or process pool (`mode='thread'`/`'process'`).
-- The process pool is started with a **worker initializer** so that spawned
-  workers (Windows) can re-establish the runtime state required by the objective;
-  on Linux the state is inherited through `fork`.
+- The process pool is started with a **worker initializer**. A host application
+  registers `capture()` / `restore(data)` with `register_worker_state` so that
+  spawned workers (Windows) re-establish the runtime state required by the
+  objective; on Linux the state is inherited through `fork`.
 - An optional `EvalCache` answers repeated positions without re-evaluating.
 
-In `DEEMI` the function returns `(particles, n_real_evals)` so the driver can keep
-an exact evaluation budget.
+The function returns `(particles, n_real_evals)` so the driver can keep an exact
+evaluation budget.
 
 ## `DEEM.toolbox`
 
@@ -70,6 +77,8 @@ Numerical helpers used across the algorithm, including:
 - `lehmer_mean`, `weighted_lehmer_mean`, `success_history_lehmer` — parameter
   adaptation;
 - `space_filling_sample`, `covariance_seed` — used by the DEEMI hybrid restart;
+- `resolve_rng(rng)` — every random helper takes an optional `rng`
+  (`None`: NumPy's global RNG);
 - `contraction_expansion`, `hashable_array` — utilities.
 
 ## `DEEM.surrogate`

@@ -67,23 +67,32 @@ cores is essential.
 ### Windows worker initialization
 
 On Windows, worker processes are *spawned* and do not inherit the parent process
-state. The bundled `evaluation.py` starts the pool with an **initializer** that
-re-establishes the runtime state the objective needs (for numgeo-ACT, the
-`ACT.globals` module) in every worker:
+state. If the objective reads settings that are configured at runtime in the main
+process (a model, experimental data, weights), register a capture/restore pair;
+the pool initializer passes the captured state to every new worker:
 
 ```python
-# DEEM/evaluation.py (excerpt)
-with futures.ProcessPoolExecutor(
-        max_workers=nworkers,
-        initializer=initialize_worker,
-        initargs=(worker_data,)) as executor:
-    ...
+# my_calibration/settings.py  (module-level functions: they are pickled by reference)
+SETTINGS = {}
+
+def capture():
+    return dict(SETTINGS)          # runs in the main process when the pool starts
+
+def restore(state):
+    SETTINGS.update(state)         # runs once in every worker process
 ```
 
-On Linux this state is inherited through `fork`, so no special handling is
-required. If your objective relies on state set at runtime in the main process,
-make sure that state is available to the workers — either through the initializer
-mechanism, or by running serially with `nworkers=1`.
+```python
+from DEEM.evaluation import register_worker_state
+from my_calibration import settings
+
+settings.SETTINGS.update(model="hypoplasticity", tests=load_tests())
+register_worker_state(settings.capture, settings.restore)
+```
+
+numgeo-ACT registers its calibration settings in exactly this way (in its vendored
+copy of DEEM). On Linux the state is inherited through `fork`, so no special
+handling is required; running serially with `nworkers=1` also avoids the issue.
 
 ## Reducing expensive evaluations
 

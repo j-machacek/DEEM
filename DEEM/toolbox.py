@@ -8,7 +8,7 @@
 """
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 #               DEEM - Differential Evolution with Elitism and Multi-populations
-#                            Copyright (C) 2023-2025 Jan Machacek  
+#                            Copyright (C) 2023-2026 Jan Machacek  
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 #
 # author: Jan Machacek, jan-machacek@outlook.com
@@ -41,6 +41,12 @@
 #                           - covariance_seed: EDA-style Gaussian seeding around an
 #                             elite using a shrinkage covariance, so that parameter
 #                             interdependencies are respected during the restart.
+# 16.11.2026, J. Machacek - space_filling_sample draws the scrambling seed of the
+#                           Sobol engine from the optimiser's RNG (reproducible restarts)
+# 16.11.2026, J. Machacek - Every random draw takes an optional rng (a
+#                           numpy.random.RandomState, see resolve_rng) instead of
+#                           using numpy's global RNG; covariance_seed regularises every
+#                           dimension relative to its own span (scale invariance)
 #
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 """
@@ -52,7 +58,20 @@ from scipy.special import gamma
 from typing import Sequence
 
 
-def contraction_expansion(method: str, min_val: float, max_val: float, maxiter: int) -> np.ndarray:
+def resolve_rng(rng=None):
+    """
+    Return the random number generator to draw from.
+
+    None selects numpy's global RNG (the legacy behaviour, np.random.*); otherwise
+    rng must offer the numpy.random.RandomState interface. DEEMI passes its own
+    RandomState, so its stream is independent of any other user of np.random
+    (e.g. a stochastic objective) and identical to the former global seeding.
+    """
+    # 16.11.2026, J. Machacek - Initial version
+    return np.random.mtrand._rand if rng is None else rng
+
+
+def contraction_expansion(method: str, min_val: float, max_val: float, maxiter: int, rng=None) -> np.ndarray:
     """
     Generate a sequence transitioning from 'max_val' to 'min_val' (or vice versa)
     according to the specified method.
@@ -76,7 +95,7 @@ def contraction_expansion(method: str, min_val: float, max_val: float, maxiter: 
         return max_val * ((min_val / max_val) ** x)
     elif method == 'gaussian':
         mu, sigma = 0.0, 1.0
-        u = np.random.uniform(min_val, max_val, maxiter)
+        u = resolve_rng(rng).uniform(min_val, max_val, maxiter)
         cdf_value = norm.cdf(u, loc=mu, scale=sigma)
         return u * cdf_value
     else:
@@ -88,7 +107,8 @@ class Density:
     Density-based sampling class for tracking visit counts in the search space.
     """
 
-    def __init__(self, LB: Sequence[float], UB: Sequence[float], num_bins: int = 10):
+    def __init__(self, LB: Sequence[float], UB: Sequence[float], num_bins: int = 10, rng=None):
+        self.rng = resolve_rng(rng)
         self.LB = np.array(LB, dtype=float)
         self.UB = np.array(UB, dtype=float)
         self.num_bins = num_bins
@@ -128,7 +148,7 @@ class Density:
         bin_widths = (self.UB - self.LB) / self.num_bins
         # For each dimension, pick the bin index with the minimal count.
         min_bins_indices = np.argmin(self.matrix, axis=1)
-        random_offsets = np.random.rand(len(self.LB)) * bin_widths
+        random_offsets = self.rng.rand(len(self.LB)) * bin_widths
         new_position = self.LB + min_bins_indices * bin_widths + random_offsets
         self.update_density([new_position])
         return new_position
@@ -158,9 +178,9 @@ class Density:
             # Normalize weights to obtain a probability distribution.
             probabilities = weights / np.sum(weights)
             # Sample a bin index according to these probabilities.
-            bin_index = np.random.choice(self.num_bins, p=probabilities)
+            bin_index = self.rng.choice(self.num_bins, p=probabilities)
             # Sample uniformly within the selected bin.
-            offset = np.random.rand() * bin_widths[d]
+            offset = self.rng.rand() * bin_widths[d]
             new_val = self.LB[d] + bin_index * bin_widths[d] + offset
             new_position.append(new_val)
         new_position = np.array(new_position)
@@ -238,7 +258,7 @@ def lehmer_mean(values: np.ndarray) -> float:
     return float(np.sum(values ** 2) / total)
 
 
-def Levy(ndim: int, beta: float) -> np.ndarray:
+def Levy(ndim: int, beta: float, rng=None) -> np.ndarray:
     """
     Generate a Levy flight step vector.
     """
@@ -246,8 +266,9 @@ def Levy(ndim: int, beta: float) -> np.ndarray:
     denominator = gamma((1 + beta) / 2.0) * beta * (2.0 ** ((beta - 1.0) / 2.0))
     sigma_u = (numerator / denominator) ** (1.0 / beta)
     sigma_v = 1.0
-    u = np.random.normal(0, sigma_u, ndim)
-    v = np.random.normal(0, sigma_v, ndim)
+    rng = resolve_rng(rng)
+    u = rng.normal(0, sigma_u, ndim)
+    v = rng.normal(0, sigma_v, ndim)
     return u / (np.abs(v) ** (1.0 / beta))
 
 
@@ -306,7 +327,7 @@ def success_history_lehmer(values: np.ndarray, improvements: np.ndarray,
     return float(np.sum(w * values ** 2) / denom)
 
 
-def space_filling_sample(n: int, LB: np.ndarray, UB: np.ndarray) -> np.ndarray:
+def space_filling_sample(n: int, LB: np.ndarray, UB: np.ndarray, rng=None) -> np.ndarray:
     """
     Draw n scrambled low-discrepancy (Sobol) points in the box [LB, UB].
 
@@ -318,20 +339,21 @@ def space_filling_sample(n: int, LB: np.ndarray, UB: np.ndarray) -> np.ndarray:
     try:
         import warnings
         from scipy.stats.qmc import Sobol
-        eng = Sobol(d=len(LB), scramble=True)
+        from .sampling import scrambled_qmc_engine
+        eng = scrambled_qmc_engine(Sobol, len(LB), rng=rng)
         with warnings.catch_warnings():
             # n is generally not a power of two here; the resulting (mild) loss of
             # balance is irrelevant for restart space-filling, so silence the notice.
             warnings.simplefilter("ignore")
             u = eng.random(n)
     except Exception:
-        u = np.random.rand(n, len(LB))
+        u = resolve_rng(rng).rand(n, len(LB))
     return LB + u * (UB - LB)
 
 
 def covariance_seed(elite: np.ndarray, members: np.ndarray,
                     LB: np.ndarray, UB: np.ndarray, n: int,
-                    shrink: float = 0.25) -> np.ndarray:
+                    shrink: float = 0.25, rng=None) -> np.ndarray:
     """
     EDA-style Gaussian seeding around an elite position.
 
@@ -375,11 +397,14 @@ def covariance_seed(elite: np.ndarray, members: np.ndarray,
     # diagonal shrinkage target: a fraction of the box span
     diag_target = np.diag((0.05 * span) ** 2)
     cov = (1.0 - shrink) * cov + shrink * diag_target
-    # tiny ridge for numerical stability
-    cov += np.eye(ndim) * (1e-12 * np.mean(span) ** 2 + 1e-300)
+    # tiny ridge for numerical stability, relative to the span of every
+    # dimension (16.11.2026, J. Machacek - was the mean span of all dimensions,
+    # which swamped dimensions with a small range)
+    cov += np.diag(1e-12 * span ** 2 + 1e-300)
 
+    rng = resolve_rng(rng)
     try:
-        samples = np.random.multivariate_normal(elite, cov, size=n)
+        samples = rng.multivariate_normal(elite, cov, size=n)
     except Exception:
-        samples = elite + np.random.normal(size=(n, ndim)) * (0.05 * span)
+        samples = elite + rng.normal(size=(n, ndim)) * (0.05 * span)
     return np.clip(samples, LB, UB)
