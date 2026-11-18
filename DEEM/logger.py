@@ -31,6 +31,7 @@
 #                              number of subpopulations (ragged diversity series) and
 #                              against empty histories, so logging can never abort a run.
 # 01.07.2026, J. Machacek - force use of matplotlib.use('Agg', force=True) for thread safety and to avoid GUI backend issues in batch mode.
+# 16.11.2026, J. Machacek - Summary plot: fixed line colours, independent of the global colour cycle
 #
 #=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~~=~=~
 """
@@ -208,6 +209,10 @@ class Logger:
         mpl.rcParams['font.family'] = 'serif'
         mpl.rcParams['font.weight'] = 'light'
 
+        # 16.11.2026, J. Machacek - Fixed, clearly distinguishable line colours: the colour cycle of
+        # matplotlib is a global setting and may have been changed by the calling program
+        colors = plt.get_cmap('tab10').colors
+
         fig = plt.figure(figsize=(2.0 * self.FigWidth, 2.0 * self.FigHeight))
         gs = gridspec.GridSpec(2, 2, height_ratios=[1, 1], width_ratios=[1, 1])
 
@@ -216,9 +221,9 @@ class Logger:
         if self.fbest:
             cost_range = max(self.fbest) - min(self.fbest)
             if cost_range < 100:
-                ax1.plot(self.iteration, self.fbest, lw=0.75)
+                ax1.plot(self.iteration, self.fbest, lw=0.75, color=colors[0])
             else:
-                ax1.semilogy(self.iteration, self.fbest, lw=0.75)
+                ax1.semilogy(self.iteration, self.fbest, lw=0.75, color=colors[0])
         ax1.set_xlabel('Iteration no.')
         ax1.set_ylabel('Best cost f(x)')
         ax1.tick_params(direction='in')
@@ -227,8 +232,8 @@ class Logger:
 
         # 2) Diversity vs. Iteration
         ax2 = fig.add_subplot(gs[1])
-        ax2.plot(self.iteration, self.diversity_best, lw=0.75, label='current best')
-        ax2.plot(self.iteration, self.diversity_gbest, lw=0.75, label='global best')
+        ax2.plot(self.iteration, self.diversity_best, lw=0.75, color=colors[0], label='current best')
+        ax2.plot(self.iteration, self.diversity_gbest, lw=0.75, color=colors[1], label='global best')
         ax2.set_xlabel('Iteration no.')
         ax2.set_ylabel('Diversity')
         ax2.legend(loc='upper right')
@@ -238,7 +243,7 @@ class Logger:
 
         # 3) Number of reset candidate solutions vs. Iteration
         ax3 = fig.add_subplot(gs[2])
-        ax3.plot(self.iteration, self.np_reset, lw=0.75)
+        ax3.plot(self.iteration, self.np_reset, lw=0.75, color=colors[0])
         ax3.set_xlabel('Iteration no.')
         ax3.set_ylabel('Reset candidates')
         ax3.tick_params(direction='in')
@@ -255,7 +260,7 @@ class Logger:
             div = np.asarray(div)
             m = min(len(div), len(it))
             if m > 0:
-                ax4.plot(it[-m:], div[-m:], lw=0.75, label=f'subpop {i}')
+                ax4.plot(it[-m:], div[-m:], lw=0.75, color=colors[i % len(colors)], label=f'subpop {i}')
         ax4.set_xlabel('Iteration no.')
         ax4.set_ylabel('Diversity')
         if self.diversity_gbest_swarms:
